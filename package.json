@@ -1,0 +1,26 @@
+{
+  "name": "calculadora-varillas-pwa",
+  "version": "1.0.0",
+  "private": true,
+  "description": "PWA que calcula cuántas varillas longitudinales necesita una columna de concreto armado (NTP E.060 / ACI 318).",
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "start": "node herramientas/servidor.mjs",
+    "dev": "node herramientas/servidor.mjs --puerto 8080",
+    "iconos": "bash herramientas/generar-iconos.sh"
+  },
+  "keywords": ["pwa", "service-worker", "concreto-armado", "columnas", "varillas", "e060", "utec"],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ErickrU/calculadora-varillas-pwa.git"
+  },
+  "homepage": "https://github.com/ErickrU/calculadora-varillas-pwa",
+  "bugs": {
+    "url": "https://github.com/ErickrU/calculadora-varillas-pwa/issues"
+  },
+  "author": "ErickrU",
+  "license": "MIT"
+}
