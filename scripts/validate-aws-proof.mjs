@@ -674,24 +674,63 @@ function commandGuardPrepare(args) {
   });
 }
 
+function validateExecuteGuard(args, validationTime) {
+  const chain = verifyReviewedExecutionChain(args, 'execute');
+  const { evidence, summary } = validateEvidence(args, validationTime);
+  const execution = readBoundExecution(args, evidence);
+  const evidenceSha256 = sha256(readFileSync(chain.evidencePath));
+  const reviewedChainSha256 = sha256(readFileSync(chain.reviewedChainPath));
+  requireCondition(evidenceSha256 === chain.evidenceSha256, 'EVIDENCE_CHAIN', 'proof-execute.json cambió durante el guard final.');
+  requireCondition(reviewedChainSha256 === chain.reviewedChainSha256, 'EVIDENCE_CHAIN', 'chain-execute-reviewed.json cambió durante el guard final.');
+  return {
+    evidence,
+    record: {
+      toctouObservedAt: evidence.snapshots.toctou.observedAt,
+      evidenceSha256,
+      inputChainSha256: chain.inputChainSha256,
+      reviewedChainSha256,
+      execution,
+      checks: summary
+    }
+  };
+}
+
+function requireFreshLaunchBoundary(evidence, launchTime) {
+  const snapshot = requireObject(evidence.snapshots?.toctou, 'TOCTOU_REQUIRED', 'El snapshot TOCTOU de lanzamiento');
+  const startedAt = Date.parse(snapshot.startedAt);
+  const observedAt = Date.parse(snapshot.observedAt);
+  const launchAt = launchTime.getTime();
+  requireCondition(
+    Number.isFinite(startedAt) && Number.isFinite(observedAt) && Number.isFinite(launchAt) && startedAt <= observedAt,
+    'EXECUTE_TIME',
+    'La frontera de lanzamiento no contiene tiempos válidos.'
+  );
+  requireCondition(observedAt <= launchAt + 5_000, 'TIMESTAMP_FUTURE', 'La evidencia tiene timestamps futuros al terminar el guard.');
+  requireCondition(launchAt - startedAt <= CONTRACT.maxFreshnessMs, 'TIMESTAMP_STALE', 'El snapshot TOCTOU venció dentro del guard de lanzamiento.');
+}
+
 function commandGuardExecute(args) {
   requireCondition(required(args, '--phase') === 'execute', 'PHASE', 'El guard final solo admite execute.');
-  const requestedAt = required(args, '--requested-at');
-  requireCondition(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/.test(requestedAt) && Number.isFinite(Date.parse(requestedAt)), 'EXECUTE_TIME', 'El inicio de execute debe ser UTC.');
-  const chain = verifyReviewedExecutionChain(args, 'execute');
-  const { evidence, evidencePath, summary } = validateEvidence(args, requestedAt);
-  const execution = readBoundExecution(args, evidence);
-  requireCondition(sha256(readFileSync(chain.evidencePath)) === chain.evidenceSha256, 'EVIDENCE_CHAIN', 'proof-execute.json cambió durante el guard final.');
-  requireCondition(sha256(readFileSync(chain.reviewedChainPath)) === chain.reviewedChainSha256, 'EVIDENCE_CHAIN', 'chain-execute-reviewed.json cambió durante el guard final.');
+
+  if (args.has('--requested-at')) {
+    const requestedAt = required(args, '--requested-at');
+    requireCondition(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/.test(requestedAt) && Number.isFinite(Date.parse(requestedAt)), 'EXECUTE_TIME', 'El inicio del guard preliminar debe ser UTC.');
+    const { record } = validateExecuteGuard(args, requestedAt);
+    writeExclusiveJson(resolve(required(args, '--output')), { requestedAt, ...record });
+    return;
+  }
+
+  const validationStartedAt = new Date();
+  const { evidence, record } = validateExecuteGuard(args, validationStartedAt);
+  const launchTime = new Date();
+  requireFreshLaunchBoundary(evidence, launchTime);
+  const launchAuthorizedAt = launchTime.toISOString().replace(/\.\d{3}Z$/, 'Z');
   writeExclusiveJson(resolve(required(args, '--output')), {
-    requestedAt,
-    toctouObservedAt: evidence.snapshots.toctou.observedAt,
-    evidenceSha256: sha256(readFileSync(evidencePath)),
-    inputChainSha256: chain.inputChainSha256,
-    reviewedChainSha256: chain.reviewedChainSha256,
-    execution,
-    checks: summary
+    validationStartedAt: validationStartedAt.toISOString().replace(/\.\d{3}Z$/, 'Z'),
+    launchAuthorizedAt,
+    ...record
   });
+  process.stdout.write(`${launchAuthorizedAt}\n`);
 }
 
 function commandVerifyExecuteCapture(args) {
@@ -705,7 +744,7 @@ function commandVerifyExecuteCapture(args) {
   requirePrivateFile(reviewedChainPath);
   const guard = readJson(guardPath, 'EXECUTE_GUARD');
   const capture = readJson(capturePath, 'EXECUTE_CAPTURE');
-  requireCondition(guard.requestedAt === capture.requestedAt, 'EXECUTE_CORRELATION', 'El guard final no corresponde al inicio capturado de execute-change-set.');
+  requireCondition(guard.launchAuthorizedAt === capture.requestedAt, 'EXECUTE_CORRELATION', 'La autorización final no corresponde al inicio capturado de execute-change-set.');
   requireCondition(guard.evidenceSha256 === sha256(readFileSync(evidencePath)), 'EXECUTE_CORRELATION', 'La evidencia validada por el guard final cambió.');
   requireCondition(guard.reviewedChainSha256 === sha256(readFileSync(reviewedChainPath)), 'EXECUTE_CORRELATION', 'La cadena revisada por el guard final cambió.');
   requireCondition(Date.parse(capture.requestedAt) <= Date.parse(capture.respondedAt), 'EXECUTE_CORRELATION', 'La captura de execute-change-set tiene un intervalo inválido.');

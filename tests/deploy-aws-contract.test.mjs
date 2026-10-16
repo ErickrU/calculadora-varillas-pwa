@@ -122,20 +122,24 @@ test('vincula el puntero antes de AWS y sella la prueba TOCTOU usada por execute
   assert.match(prepareBlock, /CHANGE_SET_ID="\$\(jq -er '\.execution\.changeSetId' "\$ATTEMPT_DIR\/execute-prepare-guard\.json"\)"/);
   assert.doesNotMatch(script, /(?:STACK_ID|CHANGE_SET_ID)="\$\(jq -er '\.(?:stackId|changeSetId)' "\$CHANGE_STATE"\)"/);
 
-  const block = script.match(/EXECUTE_REQUESTED_AT="\$\(utc_now\)"[\s\S]+?require_capture_success 'CloudFormation no aceptó la ejecución;/)?.[0];
+  const block = script.match(/INITIAL_GUARD_AT="\$\(utc_now\)"[\s\S]+?require_capture_success 'CloudFormation no aceptó la ejecución;/)?.[0];
   assert.ok(block, 'debe existir el guard final ligado a execute');
-  assert.match(block, /guard-execute[\s\S]+?--requested-at "\$EXECUTE_REQUESTED_AT"/);
+  assert.match(block, /guard-execute[\s\S]+?--requested-at "\$INITIAL_GUARD_AT"/);
   assert.match(block, /--pointer "\$CHANGE_STATE"/);
   assert.match(block, /--attempt "\$ATTEMPT_DIR\/attempt\.json"/);
   assert.match(block, /--prepare-evidence "\$ATTEMPT_DIR\/proof-prepare\.json"/);
   assert.match(block, /--reviewed-chain "\$ATTEMPT_DIR\/chain-execute-reviewed\.json"/);
   assert.match(block, /--previous-chain "\$ATTEMPT_DIR\/chain-prepare\.json"/);
   assert.match(block, /CLIENT_TOKEN="\$\(jq -er '\.execution\.clientToken' "\$ATTEMPT_DIR\/execute-guard\.json"\)"/);
+  assert.match(block, /EXECUTE_REQUESTED_AT="\$\([\s\S]+?guard-execute[\s\S]+?--output "\$ATTEMPT_DIR\/execute-launch-guard\.json"[\s\S]+?\)"/);
   assert.match(block, /capture_command_at execute-change-set "\$EXECUTE_REQUESTED_AT"/);
   assert.match(block, /verify-execute-capture[\s\S]+?--reviewed-chain "\$ATTEMPT_DIR\/chain-execute-reviewed\.json"/);
   assert.doesNotMatch(script, /CLIENT_TOKEN="\$\(jq -er '\.clientToken' "\$CHANGE_STATE"\)"/);
   assert.ok(block.indexOf('guard-execute') < block.indexOf("'.execution.clientToken'"));
-  assert.ok(block.indexOf("'.execution.clientToken'") < block.indexOf('capture_command_at execute-change-set'));
+  assert.ok(block.indexOf("'.execution.clientToken'") < block.indexOf('EXECUTE_REQUESTED_AT="$('));
+  assert.ok(block.indexOf('EXECUTE_REQUESTED_AT="$(') < block.indexOf('capture_command_at execute-change-set'));
+  const launchBlock = block.slice(block.indexOf('EXECUTE_REQUESTED_AT="$('), block.indexOf('capture_command_at execute-change-set'));
+  assert.doesNotMatch(launchBlock, /--requested-at|\butc_now\b|\bjq\b/);
   assert.doesNotMatch(block, /\b(?:report|seal)\b/);
 });
 
@@ -549,7 +553,7 @@ test('build y validate completan un intento sintético con identidad persistida'
     ]);
     assert.equal(sealedExecute.status, 0, sealedExecute.stderr);
 
-    const guardExecuteArguments = (output, requestedAt = at(30)) => [
+    const guardArguments = (output) => [
       'guard-execute',
       '--phase', 'execute',
       '--evidence', executeEvidencePath,
@@ -566,9 +570,31 @@ test('build y validate completan un intento sintético con identidad persistida'
       '--expected-region', identity.region,
       '--expected-commit-sha', 'a'.repeat(40),
       '--expected-identity-sha', identityHash,
-      '--requested-at', requestedAt,
       '--output', output
     ];
+    const guardExecuteArguments = (output, requestedAt = at(30)) => [
+      ...guardArguments(output),
+      '--requested-at', requestedAt
+    ];
+    const clockEnvironment = (name, times) => {
+      const hookPath = join(temporary, name);
+      writePrivate(hookPath, `
+const RealDate = Date;
+const times = ${JSON.stringify(times)};
+let index = 0;
+global.Date = class extends RealDate {
+  constructor(...argumentsList) {
+    if (argumentsList.length > 0) super(...argumentsList);
+    else super(times[Math.min(index++, times.length - 1)]);
+  }
+  static now() { return new this().getTime(); }
+};
+`);
+      return {
+        ...process.env,
+        NODE_OPTIONS: [process.env.NODE_OPTIONS, `--require=${hookPath}`].filter(Boolean).join(' ')
+      };
+    };
     const originalExecuteEvidence = readFileSync(executeEvidencePath);
     const changedExecuteEvidence = JSON.parse(originalExecuteEvidence.toString('utf8'));
     changedExecuteEvidence.create.response.stackId = `fixture-stack/${CONTRACT.blockedStackName}`;
@@ -589,47 +615,67 @@ test('build y validate completan un intento sintético con identidad persistida'
     assert.equal(guarded.reviewedChainSha256, sha256(readFileSync(executeReviewedChain)));
 
     writePrivateJson(executeEvidencePath, changedExecuteEvidence);
-    const changedAtLaunch = runCli(guardExecuteArguments(
-      join(attemptDirectory, 'execute-launch-changed-proof.json'),
-      at(31)
-    ));
+    const changedAtLaunch = spawnSync(process.execPath, [
+      cli,
+      ...guardArguments(join(attemptDirectory, 'execute-launch-changed-proof.json'))
+    ], {
+      encoding: 'utf8',
+      env: clockEnvironment('clock-changed.cjs', [at(30), at(31)])
+    });
     assert.notEqual(changedAtLaunch.status, 0);
     assert.match(changedAtLaunch.stderr, /EVIDENCE_CHAIN/);
     writePrivate(executeEvidencePath, originalExecuteEvidence);
 
     const launchGuardPath = join(attemptDirectory, 'execute-launch-guard.json');
-    const launchGuard = runCli(guardExecuteArguments(launchGuardPath, at(31)));
+    const launchGuard = spawnSync(process.execPath, [cli, ...guardArguments(launchGuardPath)], {
+      encoding: 'utf8',
+      env: clockEnvironment('clock-valid.cjs', [at(30), at(31)])
+    });
     assert.equal(launchGuard.status, 0, launchGuard.stderr);
+    assert.equal(launchGuard.stdout.trim(), at(31));
     assert.equal(mode(launchGuardPath), 0o600);
-    assert.equal(JSON.parse(readFileSync(launchGuardPath, 'utf8')).requestedAt, at(31));
+    const launchRecord = JSON.parse(readFileSync(launchGuardPath, 'utf8'));
+    assert.equal(launchRecord.validationStartedAt, at(30));
+    assert.equal(launchRecord.launchAuthorizedAt, at(31));
 
-    const delayedLaunch = runCli(guardExecuteArguments(
-      join(attemptDirectory, 'execute-launch-stale.json'),
-      at(321)
-    ));
+    const staleGuardPath = join(attemptDirectory, 'execute-launch-stale.json');
+    const launchMarker = join(temporary, 'simulated-aws-process-started');
+    const delayedLaunch = spawnSync('bash', [
+      '-c',
+      'set -euo pipefail; validator="$1"; marker="$2"; shift 2; launch_at="$(node "$validator" "$@")"; [[ -n "$launch_at" ]]; printf started >"$marker"',
+      'launch-boundary',
+      cli,
+      launchMarker,
+      ...guardArguments(staleGuardPath)
+    ], {
+      encoding: 'utf8',
+      env: clockEnvironment('clock-stale.cjs', [at(30), at(321)])
+    });
     assert.notEqual(delayedLaunch.status, 0);
     assert.match(delayedLaunch.stderr, /TIMESTAMP_STALE/);
+    assert.throws(() => readFileSync(staleGuardPath), (error) => error?.code === 'ENOENT');
+    assert.throws(() => readFileSync(launchMarker), (error) => error?.code === 'ENOENT');
   } finally {
     rmSync(temporary, { recursive: true, force: true });
   }
 });
 
-test('renueva el reloj y revalida inmediatamente antes de crear el proceso AWS', () => {
-  const firstTimestamp = script.indexOf('EXECUTE_REQUESTED_AT="$(utc_now)"');
+test('mide la frescura al terminar el guard antes de crear el proceso AWS', () => {
+  const firstTimestamp = script.indexOf('INITIAL_GUARD_AT="$(utc_now)"');
   const firstGuard = script.indexOf('node "$VALIDATOR" guard-execute', firstTimestamp);
   const tokenBinding = script.indexOf('CLIENT_TOKEN="$(jq -er', firstGuard);
-  const renewedTimestamp = script.indexOf('EXECUTE_REQUESTED_AT="$(utc_now)"', firstTimestamp + 1);
-  const launchGuard = script.indexOf('node "$VALIDATOR" guard-execute', renewedTimestamp);
+  const launchAssignment = script.indexOf('EXECUTE_REQUESTED_AT="$(', tokenBinding);
+  const launchGuard = script.indexOf('node "$VALIDATOR" guard-execute', launchAssignment);
   const capture = script.indexOf('capture_command_at execute-change-set "$EXECUTE_REQUESTED_AT"', launchGuard);
   const verify = script.indexOf('node "$VALIDATOR" verify-execute-capture', capture);
 
   assert.ok(firstTimestamp >= 0 && firstTimestamp < firstGuard);
-  assert.ok(firstGuard < tokenBinding && tokenBinding < renewedTimestamp);
-  assert.ok(renewedTimestamp < launchGuard && launchGuard < capture && capture < verify);
-  const launchBlock = script.slice(launchGuard, capture);
-  assert.match(launchBlock, /--requested-at "\$EXECUTE_REQUESTED_AT"/);
+  assert.ok(firstGuard < tokenBinding && tokenBinding < launchAssignment);
+  assert.ok(launchAssignment < launchGuard && launchGuard < capture && capture < verify);
+  const launchBlock = script.slice(launchAssignment, capture);
   assert.match(launchBlock, /--output "\$ATTEMPT_DIR\/execute-launch-guard\.json"/);
-  assert.doesNotMatch(launchBlock, /\bjq\b/);
+  assert.doesNotMatch(launchBlock, /--requested-at|\butc_now\b|\bjq\b/);
+  assert.match(launchBlock, /^EXECUTE_REQUESTED_AT="\$\([\s\S]+\)"\n$/);
   assert.match(
     script.slice(verify, script.indexOf("require_capture_success 'CloudFormation no aceptó", verify)),
     /--guard "\$ATTEMPT_DIR\/execute-launch-guard\.json"/

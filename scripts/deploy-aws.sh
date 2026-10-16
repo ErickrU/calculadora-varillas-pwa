@@ -522,7 +522,7 @@ node "$VALIDATOR" seal \
   --previous "$ATTEMPT_DIR/chain-input-execute.json"
 
 info 'Ejecutando exactamente el change set CREATE v2 validado'
-EXECUTE_REQUESTED_AT="$(utc_now)"
+INITIAL_GUARD_AT="$(utc_now)"
 node "$VALIDATOR" guard-execute \
   --phase execute \
   --evidence "$ATTEMPT_DIR/proof-execute.json" \
@@ -539,33 +539,33 @@ node "$VALIDATOR" guard-execute \
   --expected-region "$REGION" \
   --expected-commit-sha "$CONFIRM_COMMIT_SHA" \
   --expected-identity-sha "$CONFIRM_IDENTITY_SHA" \
-  --requested-at "$EXECUTE_REQUESTED_AT" \
+  --requested-at "$INITIAL_GUARD_AT" \
   --output "$ATTEMPT_DIR/execute-guard.json"
 STACK_ID="$(jq -er '.execution.stackId' "$ATTEMPT_DIR/execute-guard.json")"
 CHANGE_SET_ID="$(jq -er '.execution.changeSetId' "$ATTEMPT_DIR/execute-guard.json")"
 CLIENT_TOKEN="$(jq -er '.execution.clientToken' "$ATTEMPT_DIR/execute-guard.json")"
 
-# Renueva el reloj después de derivar los IDs y repite toda la validación sin
-# interponer trabajo entre este guard de lanzamiento y el proceso AWS.
-EXECUTE_REQUESTED_AT="$(utc_now)"
-node "$VALIDATOR" guard-execute \
-  --phase execute \
-  --evidence "$ATTEMPT_DIR/proof-execute.json" \
-  --prepare-evidence "$ATTEMPT_DIR/proof-prepare.json" \
-  --template "$TEMPLATE" \
-  --commit-template "$ATTEMPT_DIR/commit-template.yaml" \
-  --chain "$ATTEMPT_DIR/chain-input-execute.json" \
-  --reviewed-chain "$ATTEMPT_DIR/chain-execute-reviewed.json" \
-  --previous-chain "$ATTEMPT_DIR/chain-prepare.json" \
-  --pointer "$CHANGE_STATE" \
-  --attempt "$ATTEMPT_DIR/attempt.json" \
-  --attempt-dir "$ATTEMPT_DIR" \
-  --expected-profile "$PROFILE" \
-  --expected-region "$REGION" \
-  --expected-commit-sha "$CONFIRM_COMMIT_SHA" \
-  --expected-identity-sha "$CONFIRM_IDENTITY_SHA" \
-  --requested-at "$EXECUTE_REQUESTED_AT" \
-  --output "$ATTEMPT_DIR/execute-launch-guard.json"
+# El guard de lanzamiento genera esta hora después de completar toda la
+# validación y vuelve a exigir frescura antes de autorizar el proceso AWS.
+EXECUTE_REQUESTED_AT="$(
+  node "$VALIDATOR" guard-execute \
+    --phase execute \
+    --evidence "$ATTEMPT_DIR/proof-execute.json" \
+    --prepare-evidence "$ATTEMPT_DIR/proof-prepare.json" \
+    --template "$TEMPLATE" \
+    --commit-template "$ATTEMPT_DIR/commit-template.yaml" \
+    --chain "$ATTEMPT_DIR/chain-input-execute.json" \
+    --reviewed-chain "$ATTEMPT_DIR/chain-execute-reviewed.json" \
+    --previous-chain "$ATTEMPT_DIR/chain-prepare.json" \
+    --pointer "$CHANGE_STATE" \
+    --attempt "$ATTEMPT_DIR/attempt.json" \
+    --attempt-dir "$ATTEMPT_DIR" \
+    --expected-profile "$PROFILE" \
+    --expected-region "$REGION" \
+    --expected-commit-sha "$CONFIRM_COMMIT_SHA" \
+    --expected-identity-sha "$CONFIRM_IDENTITY_SHA" \
+    --output "$ATTEMPT_DIR/execute-launch-guard.json"
+)"
 capture_command_at execute-change-set "$EXECUTE_REQUESTED_AT" "${AWS[@]}" cloudformation execute-change-set \
   --change-set-name "$CHANGE_SET_ID" --stack-name "$STACK_ID" \
   --client-request-token "$CLIENT_TOKEN"
