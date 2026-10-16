@@ -93,7 +93,7 @@ El caso funcional de referencia debe seguir produciendo 8 barras, `As = 15 cm²`
 
 ## Retención y recuperación
 
-`RetainExceptOnCreate` permite que CloudFormation elimine el bucket si falla la creación inicial, pero lo retiene una vez creada correctamente la stack. `UpdateReplacePolicy: Retain`, versionado, stack policy y termination protection agregan barreras contra pérdida accidental. El almacenamiento retenido y sus versiones pueden seguir generando cargos. Este repositorio no automatiza eliminación ni desactivación de protecciones.
+`DeletionPolicy: Retain` conserva el bucket durante un rollback de la creación inicial y al eliminar la stack; `UpdateReplacePolicy: Retain` lo conserva ante un reemplazo. El versionado, la stack policy y termination protection agregan más barreras contra pérdida accidental. El almacenamiento retenido y sus versiones pueden seguir generando cargos. Este repositorio no automatiza eliminación ni desactivación de protecciones.
 
 ## Fuentes
 

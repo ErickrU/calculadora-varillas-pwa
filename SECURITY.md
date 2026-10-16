@@ -22,7 +22,8 @@ El despliegue AWS propuesto agrega:
 - denegación explícita de transporte no seguro hacia S3;
 - redirección HTTP→HTTPS y únicamente `GET`/`HEAD` para clientes;
 - CSP sin `unsafe-inline`, `DENY`, `nosniff`, HSTS seguro para `cloudfront.net`, Referrer Policy y Permissions Policy, sin `X-XSS-Protection`;
-- `DeletionPolicy: RetainExceptOnCreate`, `UpdateReplacePolicy: Retain`, stack policy que deniega todo update y termination protection para `prod` antes de publicar;
+- `DeletionPolicy: Retain` conserva el bucket durante un rollback de la creación inicial y al eliminar la stack; `UpdateReplacePolicy: Retain` lo conserva ante un reemplazo;
+- versionado, stack policy que deniega todo update y termination protection para `prod` antes de publicar; el almacenamiento y las versiones retenidos pueden generar costos y no existe limpieza automática;
 - flujo de creación en dos invocaciones, sin rutas de actualización, eliminación o limpieza.
 
 Este repositorio no versiona credenciales, outputs ni estado de una cuenta AWS. Usa credenciales temporales de mínimo privilegio, verifica la identidad activa antes de cualquier escritura y conserva `.aws-change-set.json` y `.aws-deployment.json` únicamente como estado local ignorado con modo `0600`. Consulta [`docs/AWS-DEPLOYMENT.md`](docs/AWS-DEPLOYMENT.md).

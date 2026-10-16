@@ -61,7 +61,7 @@ La plantilla contiene exactamente cinco recursos: bucket, bucket policy, OAC, di
 
 ## 4. Protección operativa
 
-`DeletionPolicy: RetainExceptOnCreate` evita dejar un bucket si falla la creación inicial, pero lo retiene después de una creación correcta. `UpdateReplacePolicy: Retain` evita pérdida por reemplazo. Además, la stack policy deniega `Update:*` para todos los recursos y una creación `prod` activa termination protection antes del primer upload.
+`DeletionPolicy: Retain` conserva el bucket durante un rollback de la creación inicial y al eliminar la stack. `UpdateReplacePolicy: Retain` lo conserva ante un reemplazo. Además, la stack policy deniega `Update:*` para todos los recursos y una creación `prod` activa termination protection antes del primer upload. El almacenamiento retenido y sus versiones pueden seguir generando costos; no existe limpieza automática.
 
 `deploy-aws.sh` no actualiza stacks. `review` solo valida; `prepare` crea un change set `CREATE` sin ejecutarlo; `execute` vuelve a inspeccionar ese mismo change set y exige cinco adiciones antes de ejecutarlo. Después verifica origen vacío, protecciones, privacidad, OAC, HTTPS y cabeceras; solo entonces carga la allowlist de 13 archivos e invalida su propia distribución.
 

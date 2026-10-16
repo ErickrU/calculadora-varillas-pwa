@@ -10,7 +10,7 @@
 
 No se crean website endpoints, CORS, ACL públicas, IAM, DNS, certificados, dominios personalizados, WAF, logs ni funciones.
 
-El bucket usa `DeletionPolicy: RetainExceptOnCreate` y `UpdateReplacePolicy: Retain`: un fallo durante la creación no deja almacenamiento huérfano, mientras una creación correcta conserva el bucket frente a una eliminación posterior. `stack-policy.json` deniega `Update:*` sobre todos los recursos. En `prod`, el flujo activa termination protection antes del primer upload.
+El bucket usa `DeletionPolicy: Retain` y `UpdateReplacePolicy: Retain`: se conserva durante un rollback de la creación inicial, al eliminar la stack y ante un reemplazo. El almacenamiento retenido y sus versiones pueden seguir generando costos; no existe limpieza automática. `stack-policy.json` deniega `Update:*` sobre todos los recursos. En `prod`, el flujo activa termination protection antes del primer upload.
 
 No ejecutes la plantilla directamente. Lee [`../docs/AWS-DEPLOYMENT.md`](../docs/AWS-DEPLOYMENT.md) y comienza con la fase de solo lectura:
 
