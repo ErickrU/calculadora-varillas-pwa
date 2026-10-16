@@ -456,7 +456,7 @@ if [[ "$PHASE" == 'prepare' ]]; then
   exit 0
 fi
 
-[[ -f "$CHANGE_STATE" && "$(file_mode "$CHANGE_STATE")" == '600' ]] || fail 'Falta el puntero privado 0600 del intento preparado.'
+[[ -f "$CHANGE_STATE" && ! -L "$CHANGE_STATE" && "$(file_mode "$CHANGE_STATE")" == '600' ]] || fail 'Falta el puntero privado regular 0600 del intento preparado.'
 [[ ! -e "$DEPLOYMENT_STATE" ]] || fail 'Ya existe estado local de despliegue; no se ejecutará otro.'
 ATTEMPT_POINTER="$(jq -er '.attemptDirectory' "$CHANGE_STATE")"
 [[ -d "$ATTEMPT_POINTER" && ! -L "$ATTEMPT_POINTER" ]] || fail 'El puntero no identifica un directorio regular.'
@@ -466,28 +466,29 @@ ATTEMPT_NAME="${ATTEMPT_DIR##*/}"
 [[ "${ATTEMPT_DIR%/*}" == "$ATTEMPTS_REAL" && "$ATTEMPT_NAME" =~ ^[a-f0-9-]{36}$ ]] || fail 'El puntero sale del directorio privado permitido.'
 [[ "$(file_mode "$ATTEMPT_DIR")" == '700' ]] || fail 'El directorio del intento debe tener modo 0700.'
 node "$VALIDATOR" check-permissions --attempt-dir "$ATTEMPT_DIR"
-node "$VALIDATOR" verify-chain --attempt-dir "$ATTEMPT_DIR" --chain "$ATTEMPT_DIR/chain-input-prepare.json" >/dev/null
-node "$VALIDATOR" verify-chain --attempt-dir "$ATTEMPT_DIR" --chain "$ATTEMPT_DIR/chain-prepare.json" >/dev/null
-read -r PREPARE_PROOF_SHA _ < <(shasum -a 256 "$ATTEMPT_DIR/proof-prepare.json")
-[[ "$PREPARE_PROOF_SHA" == "$(jq -er '.prepareEvidenceSha256' "$CHANGE_STATE")" ]] || fail 'La evidencia prepare cambió; STOP.'
 
-jq -e \
-  --arg stack "$TARGET_STACK" \
-  --arg profile "$PROFILE" \
-  --arg region "$REGION" \
-  --arg commit "$CONFIRM_COMMIT_SHA" \
-  --arg identity "$CONFIRM_IDENTITY_SHA" \
-  --arg template "$TEMPLATE_SHA" \
-  '.stackName == $stack and .profile == $profile and .region == $region and
-   .commitSha == $commit and .identitySha256 == $identity and .templateSha256 == $template and
-   (.stackId | type == "string") and (.changeSetId | type == "string") and
-   (.clientToken | type == "string")' "$CHANGE_STATE" >/dev/null || fail 'El puntero no coincide con esta ejecución v2.'
+node "$VALIDATOR" guard-prepare \
+  --phase prepare \
+  --evidence "$ATTEMPT_DIR/proof-prepare.json" \
+  --prepare-evidence "$ATTEMPT_DIR/proof-prepare.json" \
+  --template "$TEMPLATE" \
+  --commit-template "$ATTEMPT_DIR/commit-template.yaml" \
+  --chain "$ATTEMPT_DIR/chain-input-prepare.json" \
+  --reviewed-chain "$ATTEMPT_DIR/chain-prepare.json" \
+  --pointer "$CHANGE_STATE" \
+  --attempt "$ATTEMPT_DIR/attempt.json" \
+  --attempt-dir "$ATTEMPT_DIR" \
+  --expected-profile "$PROFILE" \
+  --expected-region "$REGION" \
+  --expected-commit-sha "$CONFIRM_COMMIT_SHA" \
+  --expected-identity-sha "$CONFIRM_IDENTITY_SHA" \
+  --output "$ATTEMPT_DIR/execute-prepare-guard.json"
+STACK_ID="$(jq -er '.execution.stackId' "$ATTEMPT_DIR/execute-prepare-guard.json")"
+CHANGE_SET_ID="$(jq -er '.execution.changeSetId' "$ATTEMPT_DIR/execute-prepare-guard.json")"
+
 cmp -s "$TEMPLATE" "$ATTEMPT_DIR/submitted-template.yaml" || fail 'La plantilla cambió después de prepare.'
 write_once_from_command "$ATTEMPT_DIR/toctou-commit-template.yaml" git -C "$ROOT" show "$HEAD_SHA:infra/cloudformation.yaml" || fail 'No se pudo releer la plantilla aprobada.'
 cmp -s "$TEMPLATE" "$ATTEMPT_DIR/toctou-commit-template.yaml" || fail 'HEAD ya no contiene la plantilla aprobada.'
-
-STACK_ID="$(jq -er '.stackId' "$CHANGE_STATE")"
-CHANGE_SET_ID="$(jq -er '.changeSetId' "$CHANGE_STATE")"
 
 capture_command toctou-identity "${AWS[@]}" sts get-caller-identity --output json
 require_capture_success 'No se pudo verificar la identidad inmediatamente antes de execute.'
@@ -525,11 +526,17 @@ EXECUTE_REQUESTED_AT="$(utc_now)"
 node "$VALIDATOR" guard-execute \
   --phase execute \
   --evidence "$ATTEMPT_DIR/proof-execute.json" \
+  --prepare-evidence "$ATTEMPT_DIR/proof-prepare.json" \
   --template "$TEMPLATE" \
   --commit-template "$ATTEMPT_DIR/commit-template.yaml" \
   --chain "$ATTEMPT_DIR/chain-input-execute.json" \
+  --reviewed-chain "$ATTEMPT_DIR/chain-execute-reviewed.json" \
+  --previous-chain "$ATTEMPT_DIR/chain-prepare.json" \
   --pointer "$CHANGE_STATE" \
   --attempt "$ATTEMPT_DIR/attempt.json" \
+  --attempt-dir "$ATTEMPT_DIR" \
+  --expected-profile "$PROFILE" \
+  --expected-region "$REGION" \
   --expected-commit-sha "$CONFIRM_COMMIT_SHA" \
   --expected-identity-sha "$CONFIRM_IDENTITY_SHA" \
   --requested-at "$EXECUTE_REQUESTED_AT" \
@@ -543,7 +550,8 @@ capture_command_at execute-change-set "$EXECUTE_REQUESTED_AT" "${AWS[@]}" cloudf
 node "$VALIDATOR" verify-execute-capture \
   --guard "$ATTEMPT_DIR/execute-guard.json" \
   --capture "$ATTEMPT_DIR/execute-change-set.capture.json" \
-  --evidence "$ATTEMPT_DIR/proof-execute.json"
+  --evidence "$ATTEMPT_DIR/proof-execute.json" \
+  --reviewed-chain "$ATTEMPT_DIR/chain-execute-reviewed.json"
 require_capture_success 'CloudFormation no aceptó la ejecución; no se hará cleanup automático.'
 capture_command wait-stack-create "${AWS[@]}" cloudformation wait stack-create-complete --stack-name "$STACK_ID"
 require_capture_success 'El stack no alcanzó CREATE_COMPLETE; recursos parciales permanecen para recuperación autorizada.'

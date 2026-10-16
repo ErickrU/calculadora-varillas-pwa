@@ -6,6 +6,7 @@ import {
   readFileSync,
   rmSync,
   statSync,
+  symlinkSync,
   writeFileSync
 } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -108,15 +109,30 @@ test('normaliza la identidad y captura el request ID antes de crear', () => {
   assert.match(script, /--identity "\$ATTEMPT_DIR\/identity\.json"/);
 });
 
-test('repite el guard TOCTOU y sella el token usado por execute', () => {
+test('vincula el puntero antes de AWS y sella la prueba TOCTOU usada por execute', () => {
+  const executeStart = script.indexOf('[[ -f "$CHANGE_STATE"');
+  const prepareGuardIndex = script.indexOf('guard-prepare', executeStart);
+  const firstExecuteAwsIndex = script.indexOf('capture_command toctou-identity', executeStart);
+  assert.ok(executeStart >= 0 && prepareGuardIndex > executeStart && prepareGuardIndex < firstExecuteAwsIndex);
+  const prepareBlock = script.slice(executeStart, firstExecuteAwsIndex);
+  assert.match(prepareBlock, /! -L "\$CHANGE_STATE"/);
+  assert.match(prepareBlock, /--reviewed-chain "\$ATTEMPT_DIR\/chain-prepare\.json"/);
+  assert.match(prepareBlock, /--prepare-evidence "\$ATTEMPT_DIR\/proof-prepare\.json"/);
+  assert.match(prepareBlock, /STACK_ID="\$\(jq -er '\.execution\.stackId' "\$ATTEMPT_DIR\/execute-prepare-guard\.json"\)"/);
+  assert.match(prepareBlock, /CHANGE_SET_ID="\$\(jq -er '\.execution\.changeSetId' "\$ATTEMPT_DIR\/execute-prepare-guard\.json"\)"/);
+  assert.doesNotMatch(script, /(?:STACK_ID|CHANGE_SET_ID)="\$\(jq -er '\.(?:stackId|changeSetId)' "\$CHANGE_STATE"\)"/);
+
   const block = script.match(/EXECUTE_REQUESTED_AT="\$\(utc_now\)"[\s\S]+?require_capture_success 'CloudFormation no aceptó la ejecución;/)?.[0];
   assert.ok(block, 'debe existir el guard final ligado a execute');
   assert.match(block, /guard-execute[\s\S]+?--requested-at "\$EXECUTE_REQUESTED_AT"/);
   assert.match(block, /--pointer "\$CHANGE_STATE"/);
   assert.match(block, /--attempt "\$ATTEMPT_DIR\/attempt\.json"/);
+  assert.match(block, /--prepare-evidence "\$ATTEMPT_DIR\/proof-prepare\.json"/);
+  assert.match(block, /--reviewed-chain "\$ATTEMPT_DIR\/chain-execute-reviewed\.json"/);
+  assert.match(block, /--previous-chain "\$ATTEMPT_DIR\/chain-prepare\.json"/);
   assert.match(block, /CLIENT_TOKEN="\$\(jq -er '\.execution\.clientToken' "\$ATTEMPT_DIR\/execute-guard\.json"\)"/);
   assert.match(block, /capture_command_at execute-change-set "\$EXECUTE_REQUESTED_AT"/);
-  assert.match(block, /verify-execute-capture/);
+  assert.match(block, /verify-execute-capture[\s\S]+?--reviewed-chain "\$ATTEMPT_DIR\/chain-execute-reviewed\.json"/);
   assert.doesNotMatch(script, /CLIENT_TOKEN="\$\(jq -er '\.clientToken' "\$CHANGE_STATE"\)"/);
   assert.ok(block.indexOf('guard-execute') < block.indexOf("'.execution.clientToken'"));
   assert.ok(block.indexOf("'.execution.clientToken'") < block.indexOf('capture_command_at execute-change-set'));
@@ -433,6 +449,144 @@ test('build y validate completan un intento sintético con identidad persistida'
     const proof = JSON.parse(readFileSync(evidencePath, 'utf8'));
     assert.equal(proof.identity.principalArn, identity.principalArn);
     assert.equal(proof.create.response.requestedAt, at(5));
+
+    const prepareReviewedChain = join(attemptDirectory, 'chain-prepare.json');
+    const sealedPrepare = runCli([
+      'seal', '--attempt-dir', attemptDirectory, '--output-name', 'chain-prepare.json',
+      '--previous', chainPath
+    ]);
+    assert.equal(sealedPrepare.status, 0, sealedPrepare.stderr);
+
+    const pointerPath = join(temporary, '.aws-change-set.json');
+    const pointerCreated = runCli([
+      'pointer', '--evidence', evidencePath, '--attempt-dir', attemptDirectory, '--output', pointerPath
+    ]);
+    assert.equal(pointerCreated.status, 0, pointerCreated.stderr);
+    const validPointer = JSON.parse(readFileSync(pointerPath, 'utf8'));
+    const guardPrepareArguments = (output) => [
+      'guard-prepare',
+      '--phase', 'prepare',
+      '--evidence', evidencePath,
+      '--prepare-evidence', evidencePath,
+      '--template', templatePath,
+      '--commit-template', join(attemptDirectory, 'commit-template.yaml'),
+      '--chain', chainPath,
+      '--reviewed-chain', prepareReviewedChain,
+      '--pointer', pointerPath,
+      '--attempt', join(attemptDirectory, 'attempt.json'),
+      '--attempt-dir', attemptDirectory,
+      '--expected-profile', identity.profile,
+      '--expected-region', identity.region,
+      '--expected-commit-sha', 'a'.repeat(40),
+      '--expected-identity-sha', identityHash,
+      '--output', output
+    ];
+
+    writePrivateJson(pointerPath, {
+      ...validPointer,
+      stackId: `fixture-stack/${CONTRACT.blockedStackName}`,
+      changeSetId: `fixture-change/${CONTRACT.blockedStackName}`
+    });
+    const alteredPointer = runCli(guardPrepareArguments(join(attemptDirectory, 'guard-altered-pointer.json')));
+    assert.notEqual(alteredPointer.status, 0);
+    assert.match(alteredPointer.stderr, /EXECUTE_BINDING/);
+
+    writePrivateJson(join(temporary, 'pointer-target.json'), validPointer);
+    rmSync(pointerPath);
+    symlinkSync(join(temporary, 'pointer-target.json'), pointerPath);
+    const symbolicPointer = runCli(guardPrepareArguments(join(attemptDirectory, 'guard-symbolic-pointer.json')));
+    assert.notEqual(symbolicPointer.status, 0);
+    assert.match(symbolicPointer.stderr, /PRIVATE_MODE/);
+    rmSync(pointerPath);
+    writePrivateJson(pointerPath, validPointer);
+
+    const prepareGuardPath = join(attemptDirectory, 'execute-prepare-guard.json');
+    const prepareGuard = runCli(guardPrepareArguments(prepareGuardPath));
+    assert.equal(prepareGuard.status, 0, prepareGuard.stderr);
+    assert.equal(mode(prepareGuardPath), 0o600);
+    assert.deepEqual(JSON.parse(readFileSync(prepareGuardPath, 'utf8')).execution, {
+      stackId,
+      changeSetId,
+      changeSetName: attempt.changeSetName,
+      clientToken: attempt.clientToken,
+      prepareEvidenceSha256: sha256(readFileSync(evidencePath))
+    });
+
+    writePrivateJson(join(attemptDirectory, 'toctou-identity.stdout'), rawIdentity);
+    captureSecond = 20;
+    for (const [name, document] of Object.entries(snapshots)) {
+      writeCapture(attemptDirectory, `toctou-${name}`, {
+        stdout: `${JSON.stringify(document)}\n`,
+        exitCode: 0,
+        requestedAt: at(captureSecond),
+        respondedAt: at(captureSecond + 1)
+      });
+      captureSecond += 1;
+    }
+    writeCapture(attemptDirectory, 'toctou-get-stack-template', {
+      stderr: 'An error occurred (ValidationError) when calling GetTemplate\n',
+      exitCode: 254,
+      requestedAt: at(25),
+      respondedAt: at(26)
+    });
+
+    const executeInputChain = join(attemptDirectory, 'chain-input-execute.json');
+    const sealedExecuteInput = runCli([
+      'seal', '--attempt-dir', attemptDirectory, '--output-name', 'chain-input-execute.json',
+      '--previous', prepareReviewedChain
+    ]);
+    assert.equal(sealedExecuteInput.status, 0, sealedExecuteInput.stderr);
+    const executeEvidencePath = join(attemptDirectory, 'proof-execute.json');
+    const builtExecute = runCli([
+      'build', '--phase', 'execute', '--attempt-dir', attemptDirectory,
+      '--input-chain', executeInputChain, '--output', executeEvidencePath
+    ]);
+    assert.equal(builtExecute.status, 0, builtExecute.stderr);
+    const executeReviewedChain = join(attemptDirectory, 'chain-execute-reviewed.json');
+    const sealedExecute = runCli([
+      'seal', '--attempt-dir', attemptDirectory, '--output-name', 'chain-execute-reviewed.json',
+      '--previous', executeInputChain
+    ]);
+    assert.equal(sealedExecute.status, 0, sealedExecute.stderr);
+
+    const guardExecuteArguments = (output) => [
+      'guard-execute',
+      '--phase', 'execute',
+      '--evidence', executeEvidencePath,
+      '--prepare-evidence', evidencePath,
+      '--template', templatePath,
+      '--commit-template', join(attemptDirectory, 'commit-template.yaml'),
+      '--chain', executeInputChain,
+      '--reviewed-chain', executeReviewedChain,
+      '--previous-chain', prepareReviewedChain,
+      '--pointer', pointerPath,
+      '--attempt', join(attemptDirectory, 'attempt.json'),
+      '--attempt-dir', attemptDirectory,
+      '--expected-profile', identity.profile,
+      '--expected-region', identity.region,
+      '--expected-commit-sha', 'a'.repeat(40),
+      '--expected-identity-sha', identityHash,
+      '--requested-at', at(30),
+      '--output', output
+    ];
+    const originalExecuteEvidence = readFileSync(executeEvidencePath);
+    const changedExecuteEvidence = JSON.parse(originalExecuteEvidence.toString('utf8'));
+    changedExecuteEvidence.create.response.stackId = `fixture-stack/${CONTRACT.blockedStackName}`;
+    writePrivateJson(executeEvidencePath, changedExecuteEvidence);
+    const changedAfterSeal = runCli(guardExecuteArguments(join(attemptDirectory, 'guard-changed-proof.json')));
+    assert.notEqual(changedAfterSeal.status, 0);
+    assert.match(changedAfterSeal.stderr, /EVIDENCE_CHAIN/);
+    writePrivate(executeEvidencePath, originalExecuteEvidence);
+
+    const executeGuardPath = join(attemptDirectory, 'execute-guard.json');
+    const executeGuard = runCli(guardExecuteArguments(executeGuardPath));
+    assert.equal(executeGuard.status, 0, executeGuard.stderr);
+    assert.equal(mode(executeGuardPath), 0o600);
+    const guarded = JSON.parse(readFileSync(executeGuardPath, 'utf8'));
+    assert.equal(guarded.execution.stackId, stackId);
+    assert.equal(guarded.execution.changeSetId, changeSetId);
+    assert.equal(guarded.execution.clientToken, attempt.clientToken);
+    assert.equal(guarded.reviewedChainSha256, sha256(readFileSync(executeReviewedChain)));
   } finally {
     rmSync(temporary, { recursive: true, force: true });
   }

@@ -23,8 +23,9 @@ Un intento fallido queda intacto y bloquea reintentos automáticos. `DO_NOTHING`
 - placeholder `REVIEW_IN_PROGRESS` sin recursos, outputs ni template aplicado;
 - un único change set `CREATE_COMPLETE/AVAILABLE`, sin role, notificaciones, imports ni rollback triggers;
 - parámetros, tags, modo `STANDARD` y capabilities exactos;
+- guard local previo a toda llamada AWS de `execute` que rechaza symlinks, verifica la cadena que sella `proof-prepare.json` y vincula exactamente puntero, intento, IDs, nombre, token, profile, región, commit, identidad y plantilla;
 - exactamente cinco acciones `Add` allowlisted;
-- snapshot TOCTOU completo cuyas observaciones tienen antigüedad máxima de 300 segundos y se revalidan inmediatamente antes de `execute-change-set`.
+- snapshot TOCTOU completo cuyas observaciones tienen antigüedad máxima de 300 segundos, seguido por una cadena revisada que sella `proof-execute.json` antes de derivar los únicos IDs y token aceptados por `execute-change-set`.
 
 `ChangeSetType` no es un campo obligatorio de `DescribeChangeSet`; su ausencia o valor nulo no invalida la prueba. Un valor contradictorio sí la invalida.
 

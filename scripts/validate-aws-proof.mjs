@@ -19,6 +19,7 @@ import {
   CONTRACT,
   ProofValidationError,
   buildShareableReport,
+  canonicalJson,
   computeChainDigest,
   createAttemptRecord,
   deriveDeploymentId,
@@ -38,6 +39,11 @@ function fail(code, message) {
 
 function requireCondition(condition, code, message) {
   if (!condition) fail(code, message);
+}
+
+function requireObject(value, code, label) {
+  requireCondition(value !== null && typeof value === 'object' && !Array.isArray(value), code, `${label} debe ser un objeto.`);
+  return value;
 }
 
 function parseArguments(values) {
@@ -233,6 +239,169 @@ function verifyChain(attemptDirectory, chainPath) {
   const calculated = computeChainDigest(manifest.entries, manifest.previousChainFileSha256 ?? null);
   requireCondition(calculated === manifest.chainSha256, 'EVIDENCE_CHAIN', 'El hash encadenado no coincide.');
   return manifest;
+}
+
+function requireAttemptFile(attemptDirectory, path, expectedName, code = 'EVIDENCE_CHAIN') {
+  const resolvedDirectory = realpathSync(attemptDirectory);
+  const resolvedPath = resolve(path);
+  requirePrivateFile(resolvedPath);
+  requireCondition(
+    realpathSync(resolvedPath) === join(resolvedDirectory, expectedName),
+    code,
+    `${expectedName} no pertenece al intento privado esperado.`
+  );
+  return resolvedPath;
+}
+
+function requireChainEntry(manifest, path) {
+  const expectedHash = sha256(readFileSync(path));
+  const matches = manifest.entries.filter((entry) => entry.path === basename(path));
+  requireCondition(matches.length === 1 && matches[0].sha256 === expectedHash, 'EVIDENCE_CHAIN', `${basename(path)} no está sellado por la cadena revisada.`);
+  return expectedHash;
+}
+
+function verifyChainLink(attemptDirectory, chainPath, previousPath, requiredPaths = []) {
+  const manifest = verifyChain(attemptDirectory, chainPath);
+  if (previousPath === null) {
+    requireCondition(manifest.previousChainFileSha256 === null, 'EVIDENCE_CHAIN', `${basename(chainPath)} declara un predecesor inesperado.`);
+  } else {
+    const previousHash = sha256(readFileSync(previousPath));
+    requireCondition(manifest.previousChainFileSha256 === previousHash, 'EVIDENCE_CHAIN', `${basename(chainPath)} no enlaza la cadena anterior exacta.`);
+    requireChainEntry(manifest, previousPath);
+  }
+  const requiredHashes = Object.fromEntries(requiredPaths.map((path) => [basename(path), requireChainEntry(manifest, path)]));
+  return { manifest, chainSha256: sha256(readFileSync(chainPath)), requiredHashes };
+}
+
+function verifyReviewedExecutionChain(args, phase) {
+  const attemptDirectory = resolve(required(args, '--attempt-dir'));
+  requirePrivateDirectory(attemptDirectory);
+  const evidenceName = phase === 'prepare' ? 'proof-prepare.json' : 'proof-execute.json';
+  const inputName = phase === 'prepare' ? 'chain-input-prepare.json' : 'chain-input-execute.json';
+  const reviewedName = phase === 'prepare' ? 'chain-prepare.json' : 'chain-execute-reviewed.json';
+  const evidencePath = requireAttemptFile(attemptDirectory, required(args, '--evidence'), evidenceName);
+  const inputChainPath = requireAttemptFile(attemptDirectory, required(args, '--chain'), inputName);
+  const reviewedChainPath = requireAttemptFile(attemptDirectory, required(args, '--reviewed-chain'), reviewedName);
+
+  if (phase === 'prepare') {
+    verifyChainLink(attemptDirectory, inputChainPath, null);
+    const reviewed = verifyChainLink(attemptDirectory, reviewedChainPath, inputChainPath, [evidencePath]);
+    return {
+      attemptDirectory: realpathSync(attemptDirectory),
+      evidencePath,
+      evidenceSha256: reviewed.requiredHashes[evidenceName],
+      inputChainPath,
+      inputChainSha256: sha256(readFileSync(inputChainPath)),
+      reviewedChainPath,
+      reviewedChainSha256: reviewed.chainSha256
+    };
+  }
+
+  const prepareEvidencePath = requireAttemptFile(attemptDirectory, required(args, '--prepare-evidence'), 'proof-prepare.json');
+  const prepareInputPath = requireAttemptFile(attemptDirectory, join(attemptDirectory, 'chain-input-prepare.json'), 'chain-input-prepare.json');
+  const prepareReviewedPath = requireAttemptFile(attemptDirectory, required(args, '--previous-chain'), 'chain-prepare.json');
+  verifyChainLink(attemptDirectory, prepareInputPath, null);
+  verifyChainLink(attemptDirectory, prepareReviewedPath, prepareInputPath, [prepareEvidencePath]);
+  verifyChainLink(attemptDirectory, inputChainPath, prepareReviewedPath);
+  const reviewed = verifyChainLink(attemptDirectory, reviewedChainPath, inputChainPath, [evidencePath]);
+  return {
+    attemptDirectory: realpathSync(attemptDirectory),
+    evidencePath,
+    evidenceSha256: reviewed.requiredHashes[evidenceName],
+    inputChainPath,
+    inputChainSha256: sha256(readFileSync(inputChainPath)),
+    reviewedChainPath,
+    reviewedChainSha256: reviewed.chainSha256
+  };
+}
+
+function readBoundExecution(args, evidence) {
+  const attemptDirectory = resolve(required(args, '--attempt-dir'));
+  requirePrivateDirectory(attemptDirectory);
+  const pointerPath = resolve(required(args, '--pointer'));
+  requirePrivateFile(pointerPath);
+  requireCondition(basename(pointerPath) === '.aws-change-set.json', 'EXECUTE_BINDING', 'El puntero privado no tiene el nombre esperado.');
+  const attemptPath = requireAttemptFile(attemptDirectory, required(args, '--attempt'), 'attempt.json', 'EXECUTE_BINDING');
+  const prepareEvidencePath = requireAttemptFile(attemptDirectory, required(args, '--prepare-evidence'), 'proof-prepare.json', 'EXECUTE_BINDING');
+  const pointer = readJson(pointerPath, 'EXECUTE_BINDING');
+  const attempt = readJson(attemptPath, 'EXECUTE_BINDING');
+  const prepareEvidenceBytes = readFileSync(prepareEvidencePath);
+  const prepareEvidence = readJson(prepareEvidencePath, 'EXECUTE_BINDING');
+  const context = requireObject(prepareEvidence.context, 'EXECUTE_BINDING', 'El contexto prepare sellado');
+  const response = requireObject(prepareEvidence.create?.response, 'EXECUTE_BINDING', 'La respuesta prepare sellada');
+  const template = requireObject(prepareEvidence.template, 'EXECUTE_BINDING', 'La plantilla prepare sellada');
+  const expectedProfile = required(args, '--expected-profile');
+  const expectedRegion = required(args, '--expected-region');
+  const expectedCommitSha = required(args, '--expected-commit-sha');
+  const expectedIdentitySha = required(args, '--expected-identity-sha');
+  const currentTemplate = readFileSync(required(args, '--template'));
+  const expectedTemplateSha = sha256(currentTemplate);
+  const prepareEvidenceSha256 = sha256(prepareEvidenceBytes);
+  const canonicalAttemptDirectory = realpathSync(attemptDirectory);
+  let pointerAttemptDirectory;
+  try {
+    requireCondition(typeof pointer.attemptDirectory === 'string', 'EXECUTE_BINDING', 'El puntero no contiene attemptDirectory.');
+    pointerAttemptDirectory = realpathSync(pointer.attemptDirectory);
+  } catch (error) {
+    if (error instanceof ProofValidationError) throw error;
+    fail('EXECUTE_BINDING', 'El attemptDirectory del puntero no existe o no es accesible.');
+  }
+
+  requireCondition(prepareEvidence.phase === 'prepare', 'EXECUTE_BINDING', 'La evidencia base no es proof-prepare.json.');
+  const attemptFields = [
+    'schemaVersion', 'attemptId', 'createdAt', 'project', 'repository', 'stackName', 'environment',
+    'priceClass', 'profile', 'region', 'commitSha', 'confirmedCommitSha', 'confirmedIdentitySha',
+    'templateSha256', 'templateByteLength', 'changeSetName', 'clientToken', 'gitClean'
+  ];
+  requireCondition(attemptFields.every((field) => attempt[field] === context[field]), 'EXECUTE_BINDING', 'attempt.json no coincide exactamente con el contexto prepare sellado.');
+  requireCondition(
+    context.stackName === CONTRACT.stackName && context.stackName !== CONTRACT.blockedStackName &&
+    context.profile === expectedProfile && context.region === expectedRegion &&
+    context.commitSha === expectedCommitSha && context.confirmedCommitSha === expectedCommitSha &&
+    context.identitySha256 === expectedIdentitySha && context.confirmedIdentitySha === expectedIdentitySha &&
+    context.templateSha256 === expectedTemplateSha && template.localSha256 === expectedTemplateSha &&
+    context.templateByteLength === currentTemplate.length,
+    'EXECUTE_BINDING',
+    'El contexto prepare no coincide con target, profile, región, commit, identidad o plantilla aprobados.'
+  );
+  requireCondition(
+    pointerAttemptDirectory === canonicalAttemptDirectory &&
+    pointer.attemptId === context.attemptId && pointer.stackName === CONTRACT.stackName &&
+    pointer.stackId === response.stackId && pointer.changeSetName === context.changeSetName &&
+    pointer.changeSetId === response.changeSetId && pointer.clientToken === context.clientToken &&
+    pointer.profile === context.profile && pointer.region === context.region &&
+    pointer.commitSha === context.commitSha && pointer.identitySha256 === context.identitySha256 &&
+    pointer.templateSha256 === expectedTemplateSha && pointer.prepareEvidenceSha256 === prepareEvidenceSha256,
+    'EXECUTE_BINDING',
+    'El puntero, attempt.json y proof-prepare.json no coinciden exactamente.'
+  );
+
+  if (evidence.phase === 'execute') {
+    const historicalSectionsMatch =
+      canonicalJson(evidence.context) === canonicalJson(prepareEvidence.context) &&
+      canonicalJson(evidence.template) === canonicalJson(prepareEvidence.template) &&
+      canonicalJson(evidence.identity) === canonicalJson(prepareEvidence.identity) &&
+      canonicalJson(evidence.preflight) === canonicalJson(prepareEvidence.preflight) &&
+      canonicalJson(evidence.create) === canonicalJson(prepareEvidence.create) &&
+      canonicalJson(evidence.snapshots?.prepare) === canonicalJson(prepareEvidence.snapshots?.prepare);
+    requireCondition(historicalSectionsMatch, 'EXECUTE_BINDING', 'proof-execute.json no conserva exactamente la evidencia prepare sellada.');
+  } else {
+    requireCondition(evidence.phase === 'prepare' && canonicalJson(evidence) === canonicalJson(prepareEvidence), 'EXECUTE_BINDING', 'El guard previo no recibió proof-prepare.json.');
+  }
+
+  const executionResponse = requireObject(evidence.create?.response, 'EXECUTE_BINDING', 'La respuesta de ejecución sellada');
+  requireCondition(
+    executionResponse.stackId === response.stackId && executionResponse.changeSetId === response.changeSetId,
+    'EXECUTE_BINDING',
+    'Los IDs ejecutables no coinciden con proof-prepare.json.'
+  );
+  return {
+    stackId: executionResponse.stackId,
+    changeSetId: executionResponse.changeSetId,
+    changeSetName: evidence.context.changeSetName,
+    clientToken: evidence.context.clientToken,
+    prepareEvidenceSha256
+  };
 }
 
 function commandInit(args) {
@@ -450,7 +619,7 @@ function commandBuild(args) {
   writeExclusiveJson(resolve(required(args, '--output')), proof);
 }
 
-function validateEvidence(args, now = new Date()) {
+function validateEvidence(args, now = new Date(), includeExecutionBinding = true) {
   const evidencePath = resolve(required(args, '--evidence'));
   const chainPath = resolve(required(args, '--chain'));
   const attemptDirectory = dirname(evidencePath);
@@ -465,7 +634,7 @@ function validateEvidence(args, now = new Date()) {
     inputChainSha256: sha256(readFileSync(chainPath)),
     now
   };
-  if (args.has('--pointer') || args.has('--attempt')) {
+  if (includeExecutionBinding && (args.has('--pointer') || args.has('--attempt'))) {
     const pointerPath = resolve(required(args, '--pointer'));
     const attemptPath = resolve(required(args, '--attempt'));
     requirePrivateFile(pointerPath);
@@ -486,21 +655,41 @@ function commandValidate(args) {
   process.stdout.write('AWS proof: PASS\n');
 }
 
+function commandGuardPrepare(args) {
+  requireCondition(required(args, '--phase') === 'prepare', 'PHASE', 'El guard previo solo admite prepare.');
+  const chain = verifyReviewedExecutionChain(args, 'prepare');
+  const preview = readJson(chain.evidencePath, 'EVIDENCE');
+  const observedAt = preview.snapshots?.prepare?.observedAt;
+  requireCondition(typeof observedAt === 'string', 'EXECUTE_BINDING', 'proof-prepare.json no contiene el snapshot revisado.');
+  const { evidence, summary } = validateEvidence(args, observedAt, false);
+  const execution = readBoundExecution(args, evidence);
+  requireCondition(sha256(readFileSync(chain.evidencePath)) === chain.evidenceSha256, 'EVIDENCE_CHAIN', 'proof-prepare.json cambió durante el guard previo.');
+  requireCondition(sha256(readFileSync(chain.reviewedChainPath)) === chain.reviewedChainSha256, 'EVIDENCE_CHAIN', 'chain-prepare.json cambió durante el guard previo.');
+  writeExclusiveJson(resolve(required(args, '--output')), {
+    prepareEvidenceSha256: chain.evidenceSha256,
+    inputChainSha256: chain.inputChainSha256,
+    reviewedChainSha256: chain.reviewedChainSha256,
+    execution,
+    checks: summary
+  });
+}
+
 function commandGuardExecute(args) {
   requireCondition(required(args, '--phase') === 'execute', 'PHASE', 'El guard final solo admite execute.');
   const requestedAt = required(args, '--requested-at');
   requireCondition(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/.test(requestedAt) && Number.isFinite(Date.parse(requestedAt)), 'EXECUTE_TIME', 'El inicio de execute debe ser UTC.');
-  const { evidence, evidencePath, chainPath, summary } = validateEvidence(args, requestedAt);
+  const chain = verifyReviewedExecutionChain(args, 'execute');
+  const { evidence, evidencePath, summary } = validateEvidence(args, requestedAt);
+  const execution = readBoundExecution(args, evidence);
+  requireCondition(sha256(readFileSync(chain.evidencePath)) === chain.evidenceSha256, 'EVIDENCE_CHAIN', 'proof-execute.json cambió durante el guard final.');
+  requireCondition(sha256(readFileSync(chain.reviewedChainPath)) === chain.reviewedChainSha256, 'EVIDENCE_CHAIN', 'chain-execute-reviewed.json cambió durante el guard final.');
   writeExclusiveJson(resolve(required(args, '--output')), {
     requestedAt,
     toctouObservedAt: evidence.snapshots.toctou.observedAt,
     evidenceSha256: sha256(readFileSync(evidencePath)),
-    chainSha256: sha256(readFileSync(chainPath)),
-    execution: {
-      stackId: evidence.create.response.stackId,
-      changeSetId: evidence.create.response.changeSetId,
-      clientToken: evidence.context.clientToken
-    },
+    inputChainSha256: chain.inputChainSha256,
+    reviewedChainSha256: chain.reviewedChainSha256,
+    execution,
     checks: summary
   });
 }
@@ -509,13 +698,16 @@ function commandVerifyExecuteCapture(args) {
   const guardPath = resolve(required(args, '--guard'));
   const capturePath = resolve(required(args, '--capture'));
   const evidencePath = resolve(required(args, '--evidence'));
+  const reviewedChainPath = resolve(required(args, '--reviewed-chain'));
   requirePrivateFile(guardPath);
   requirePrivateFile(capturePath);
   requirePrivateFile(evidencePath);
+  requirePrivateFile(reviewedChainPath);
   const guard = readJson(guardPath, 'EXECUTE_GUARD');
   const capture = readJson(capturePath, 'EXECUTE_CAPTURE');
   requireCondition(guard.requestedAt === capture.requestedAt, 'EXECUTE_CORRELATION', 'El guard final no corresponde al inicio capturado de execute-change-set.');
   requireCondition(guard.evidenceSha256 === sha256(readFileSync(evidencePath)), 'EXECUTE_CORRELATION', 'La evidencia validada por el guard final cambió.');
+  requireCondition(guard.reviewedChainSha256 === sha256(readFileSync(reviewedChainPath)), 'EXECUTE_CORRELATION', 'La cadena revisada por el guard final cambió.');
   requireCondition(Date.parse(capture.requestedAt) <= Date.parse(capture.respondedAt), 'EXECUTE_CORRELATION', 'La captura de execute-change-set tiene un intervalo inválido.');
 }
 
@@ -594,6 +786,7 @@ try {
       break;
     case 'build': commandBuild(args); break;
     case 'validate': commandValidate(args); break;
+    case 'guard-prepare': commandGuardPrepare(args); break;
     case 'guard-execute': commandGuardExecute(args); break;
     case 'verify-execute-capture': commandVerifyExecuteCapture(args); break;
     case 'report': commandReport(args); break;
