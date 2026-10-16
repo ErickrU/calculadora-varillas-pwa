@@ -140,14 +140,37 @@ validate_local() {
   bash -n "$ROOT/scripts/verify-site.sh"
   node "$VALIDATOR" check-template --template "$TEMPLATE" >/dev/null
 
-  local control_count share_count
+  local control_count share_count share_action_count safe_link_count
   control_count="$(grep -o 'data-control-ventana' "$ROOT/index.html" | wc -l | tr -d ' ')"
   share_count="$(grep -o 'id="control-compartir"' "$ROOT/index.html" | wc -l | tr -d ' ')"
+  share_action_count="$(grep -o 'data-compartir-accion' "$ROOT/index.html" | wc -l | tr -d ' ')"
+  safe_link_count="$(grep -o 'target="_blank" rel="noopener noreferrer"' "$ROOT/index.html" | wc -l | tr -d ' ')"
   [[ "$control_count" == '5' ]] || fail 'La aplicación debe conservar exactamente cinco controles WCO.'
   [[ "$share_count" == '1' ]] || fail 'La aplicación debe conservar exactamente un control Compartir.'
+  [[ "$share_action_count" == '7' ]] || fail 'La hoja debe contener exactamente siete acciones para compartir.'
+  [[ "$safe_link_count" == '4' ]] || fail 'Los cuatro destinos HTTPS deben abrirse con noopener y noreferrer.'
+  grep -Fq 'id="dialogo-compartir"' "$ROOT/index.html" || fail 'Falta la hoja de Compartir.'
+  grep -Fq 'aria-labelledby="titulo-compartir"' "$ROOT/index.html" || fail 'La hoja no tiene nombre accesible.'
+  grep -Fq 'aria-describedby="descripcion-compartir"' "$ROOT/index.html" || fail 'La hoja no tiene descripción accesible.'
+  grep -Fq 'id="copia-manual"' "$ROOT/index.html" || fail 'Falta el fallback de selección manual.'
+  grep -Fq 'new URLSearchParams' "$ROOT/js/registro-sw.js" || fail 'Los destinos deben codificarse con URLSearchParams.'
+  local endpoint
+  for endpoint in \
+    'https://wa.me/' \
+    'https://t.me/share/url' \
+    'https://www.facebook.com/sharer/sharer.php' \
+    'https://twitter.com/intent/tweet'; do
+    grep -Fq "$endpoint" "$ROOT/js/registro-sw.js" || fail "Falta el destino oficial: $endpoint"
+  done
+  grep -Fq 'const enlace = window.location.href' "$ROOT/js/registro-sw.js" || fail 'Los destinos y la copia deben usar la URL actual.'
   grep -Fq 'url: window.location.href' "$ROOT/js/registro-sw.js" || fail 'Web Share debe usar la URL actual.'
-  grep -Fq 'const enlace = window.location.href' "$ROOT/js/registro-sw.js" || fail 'El fallback debe usar la URL actual.'
+  grep -Fq "btnCompartir?.addEventListener('click', abrirCompartir)" "$ROOT/js/registro-sw.js" || fail 'Compartir debe abrir la hoja sin copiar.'
+  grep -Fq "btnMasApps?.addEventListener('click'" "$ROOT/js/registro-sw.js" || fail 'Más apps debe requerir su propio click.'
+  grep -Fq 'resultado = navigator.share({' "$ROOT/js/registro-sw.js" || fail 'Más apps debe invocar Web Share directamente.'
+  grep -Fq "btnCopiarEnlace?.addEventListener('click', copiarEnlace)" "$ROOT/js/registro-sw.js" || fail 'Copiar debe requerir su propia selección.'
+  grep -Fq 'navigator.clipboard?.writeText' "$ROOT/js/registro-sw.js" || fail 'Falta Clipboard API.'
   grep -Fq "document.execCommand('copy')" "$ROOT/js/registro-sw.js" || fail 'Falta el fallback de copia.'
+  grep -Fq "error?.name === 'AbortError'" "$ROOT/js/registro-sw.js" || fail 'La cancelación nativa debe tratarse como neutral.'
   ! grep -Eiq '<style([[:space:]>])|style=' "$ROOT/offline.html" || fail 'offline.html contiene CSS inline.'
   ! grep -Eiq 'unsafe-inline|unsafe-eval' "$TEMPLATE" || fail 'La plantilla contiene una excepción CSP insegura.'
 

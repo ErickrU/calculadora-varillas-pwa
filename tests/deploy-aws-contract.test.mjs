@@ -27,7 +27,58 @@ import {
 const here = dirname(fileURLToPath(import.meta.url));
 const root = join(here, '..');
 const script = readFileSync(join(root, 'scripts', 'deploy-aws.sh'), 'utf8');
+const verifyScript = readFileSync(join(root, 'scripts', 'verify-site.sh'), 'utf8');
 const cli = join(root, 'scripts', 'validate-aws-proof.mjs');
+
+const PUBLIC_FILES = [
+  'index.html',
+  'offline.html',
+  'manifest.webmanifest',
+  'sw.js',
+  'css/estilos.css',
+  'js/app.js',
+  'js/calculo.js',
+  'js/registro-sw.js',
+  'iconos/favicon.svg',
+  'iconos/icono-192.png',
+  'iconos/icono-512.png',
+  'iconos/icono-maskable-512.png',
+  'iconos/apple-touch-icon.png'
+];
+
+function publicFilesFromScript(value) {
+  const block = value.match(/PUBLIC_FILES=\(\n([\s\S]*?)\n\)/)?.[1];
+  assert.ok(block, 'debe existir la allowlist pública');
+  return block.split('\n').map((line) => line.trim()).filter(Boolean);
+}
+
+test('conserva la allowlist exacta y valida la hoja de Compartir antes de publicar', () => {
+  assert.deepEqual(publicFilesFromScript(script), PUBLIC_FILES);
+  assert.match(script, /\$\{#PUBLIC_FILES\[@\]\}" == '13'/);
+  assert.match(script, /share_action_count[\s\S]*?== '7'/);
+  assert.match(script, /safe_link_count[\s\S]*?== '4'/);
+  assert.match(script, /id="dialogo-compartir"/);
+  assert.match(script, /new URLSearchParams/);
+  assert.match(script, /btnCompartir\?\.addEventListener\('click', abrirCompartir\)/);
+  assert.match(script, /btnCopiarEnlace\?\.addEventListener\('click', copiarEnlace\)/);
+  assert.match(script, /resultado = navigator\.share\(\{/);
+  assert.match(script, /AbortError/);
+
+  assert.match(verifyScript, /data-compartir-accion[\s\S]*?== '7'/);
+  assert.match(verifyScript, /noopener noreferrer/);
+  assert.match(verifyScript, /new URLSearchParams/);
+  assert.match(verifyScript, /btnCompartir\?\.addEventListener\('click', abrirCompartir\)/);
+  assert.match(verifyScript, /btnCopiarEnlace\?\.addEventListener\('click', copiarEnlace\)/);
+  for (const endpoint of [
+    'https://wa.me/',
+    'https://t.me/share/url',
+    'https://www.facebook.com/sharer/sharer.php',
+    'https://twitter.com/intent/tweet'
+  ]) {
+    assert.ok(script.includes(endpoint));
+    assert.ok(verifyScript.includes(endpoint));
+  }
+});
 
 function mode(path) {
   return statSync(path).mode & 0o777;

@@ -35,6 +35,19 @@ grep -Fq '<title>Calculadora de Varillas ·' "$TMP_DIR/index.html" || {
   printf 'ERROR: la publicación no contiene exactamente un control Compartir.\n' >&2
   exit 1
 }
+[[ "$(grep -o 'data-compartir-accion' "$TMP_DIR/index.html" | wc -l | tr -d ' ')" == '7' ]] || {
+  printf 'ERROR: la hoja no contiene exactamente siete acciones para compartir.\n' >&2
+  exit 1
+}
+[[ "$(grep -o 'target="_blank" rel="noopener noreferrer"' "$TMP_DIR/index.html" | wc -l | tr -d ' ')" == '4' ]] || {
+  printf 'ERROR: los destinos HTTPS no conservan target y rel seguros.\n' >&2
+  exit 1
+}
+grep -Fq 'id="dialogo-compartir"' "$TMP_DIR/index.html" || { printf 'ERROR: falta la hoja de Compartir.\n' >&2; exit 1; }
+grep -Fq 'aria-labelledby="titulo-compartir"' "$TMP_DIR/index.html" || { printf 'ERROR: la hoja no tiene nombre accesible.\n' >&2; exit 1; }
+grep -Fq 'aria-describedby="descripcion-compartir"' "$TMP_DIR/index.html" || { printf 'ERROR: la hoja no tiene descripción accesible.\n' >&2; exit 1; }
+grep -Fq 'id="estado-compartir"' "$TMP_DIR/index.html" || { printf 'ERROR: falta feedback propio de Compartir.\n' >&2; exit 1; }
+grep -Fq 'id="copia-manual"' "$TMP_DIR/index.html" || { printf 'ERROR: falta la copia manual accesible.\n' >&2; exit 1; }
 
 grep -Eiq '^content-security-policy:' "$TMP_DIR/index-headers" || { printf 'ERROR: falta CSP.\n' >&2; exit 1; }
 grep -Eiq '^x-frame-options:[[:space:]]*DENY' "$TMP_DIR/index-headers" || { printf 'ERROR: falta X-Frame-Options: DENY.\n' >&2; exit 1; }
@@ -83,16 +96,42 @@ node --check "$TMP_DIR/js-registro-sw.js" >/dev/null
   printf 'ERROR: offline.html contiene estilos inline.\n' >&2
   exit 1
 }
+grep -Fq 'new URLSearchParams' "$TMP_DIR/js-registro-sw.js" || {
+  printf 'ERROR: los destinos no usan URLSearchParams.\n' >&2
+  exit 1
+}
+for endpoint in \
+  'https://wa.me/' \
+  'https://t.me/share/url' \
+  'https://www.facebook.com/sharer/sharer.php' \
+  'https://twitter.com/intent/tweet'; do
+  grep -Fq "$endpoint" "$TMP_DIR/js-registro-sw.js" || {
+    printf 'ERROR: falta el destino oficial %s.\n' "$endpoint" >&2
+    exit 1
+  }
+done
+grep -Fq 'const enlace = window.location.href' "$TMP_DIR/js-registro-sw.js" || {
+  printf 'ERROR: los destinos y la copia no usan la URL actual.\n' >&2
+  exit 1
+}
 grep -Fq 'url: window.location.href' "$TMP_DIR/js-registro-sw.js" || {
   printf 'ERROR: Web Share no usa la URL actual.\n' >&2
   exit 1
 }
-grep -Fq 'const enlace = window.location.href' "$TMP_DIR/js-registro-sw.js" || {
-  printf 'ERROR: el fallback no usa la URL actual.\n' >&2
+grep -Fq "btnCompartir?.addEventListener('click', abrirCompartir)" "$TMP_DIR/js-registro-sw.js" || {
+  printf 'ERROR: el control superior no abre la hoja propia.\n' >&2
   exit 1
 }
-grep -Fq "typeof navigator.share === 'function'" "$TMP_DIR/js-registro-sw.js" || {
-  printf 'ERROR: falta Web Share.\n' >&2
+grep -Fq "btnMasApps?.addEventListener('click'" "$TMP_DIR/js-registro-sw.js" || {
+  printf 'ERROR: Más apps no tiene un gesto explícito.\n' >&2
+  exit 1
+}
+grep -Fq 'resultado = navigator.share({' "$TMP_DIR/js-registro-sw.js" || {
+  printf 'ERROR: falta Web Share directo desde Más apps.\n' >&2
+  exit 1
+}
+grep -Fq "btnCopiarEnlace?.addEventListener('click', copiarEnlace)" "$TMP_DIR/js-registro-sw.js" || {
+  printf 'ERROR: Copiar no requiere una selección explícita.\n' >&2
   exit 1
 }
 grep -Fq 'navigator.clipboard?.writeText' "$TMP_DIR/js-registro-sw.js" || {
@@ -103,8 +142,8 @@ grep -Fq "document.execCommand('copy')" "$TMP_DIR/js-registro-sw.js" || {
   printf 'ERROR: falta el fallback de copia.\n' >&2
   exit 1
 }
-grep -Eq 'class="estado" role="status" aria-live="polite"' "$TMP_DIR/index.html" || {
-  printf 'ERROR: falta feedback accesible.\n' >&2
+grep -Fq "error?.name === 'AbortError'" "$TMP_DIR/js-registro-sw.js" || {
+  printf 'ERROR: falta el tratamiento neutral de cancelación.\n' >&2
   exit 1
 }
 node -e '
@@ -115,5 +154,5 @@ node -e '
   exit 1
 }
 
-printf '  ✓ HTTPS, cabeceras, PWA, cinco controles, Compartir e iconos\n'
+printf '  ✓ HTTPS, cabeceras, PWA, cinco controles, hoja Compartir e iconos\n'
 printf 'Sitio publicado correctamente.\n'

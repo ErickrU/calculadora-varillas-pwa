@@ -69,12 +69,74 @@
       <p>Completa los datos de la columna, selecciona el método y pulsa <strong>Calcular varillas</strong>. Los cálculos se realizan únicamente en tu dispositivo.</p>
       <ul>
         <li><strong>Instalar:</strong> añade la aplicación cuando el navegador lo permita.</li>
-        <li><strong>Compartir:</strong> envía o copia el enlace actual.</li>
+        <li><strong>Compartir:</strong> abre una hoja con destinos y opciones para enviar o copiar el enlace actual.</li>
         <li><strong>Tema:</strong> alterna entre apariencia oscura y clara.</li>
         <li><strong>Restablecer:</strong> recupera todos los valores iniciales.</li>
         <li><strong>Ayuda:</strong> abre esta guía; también puedes cerrarla con Escape.</li>
       </ul>
       <p class="dialogo__nota">Herramienta académica: el diseño final debe revisarse con un ingeniero estructural.</p>
+    </div>
+  </dialog>
+
+  <dialog id="dialogo-compartir" class="dialogo-compartir" aria-labelledby="titulo-compartir" aria-describedby="descripcion-compartir">
+    <div class="compartir__contenido">
+      <div class="compartir__asa" aria-hidden="true"></div>
+      <button id="cerrar-compartir" class="dialogo__cerrar" type="button" aria-label="Cerrar opciones para compartir" title="Cerrar">×</button>
+      <h2 id="titulo-compartir">Compartir calculadora</h2>
+      <p id="descripcion-compartir" class="compartir__descripcion">Elige dónde enviar el enlace. Solo se comparte el título, un texto breve y la dirección actual.</p>
+
+      <div class="compartir__acciones" aria-label="Opciones para compartir">
+        <a id="compartir-whatsapp" class="compartir__accion" href="#" target="_blank" rel="noopener noreferrer" data-compartir-accion>
+          <span class="compartir__icono" aria-hidden="true">
+            <svg viewBox="0 0 24 24" focusable="false"><path d="M20 11.5a8 8 0 0 1-11.8 7L4 20l1.5-4A8 8 0 1 1 20 11.5Z"/><path d="M9 8.5c.4 2.7 1.8 4.1 4.5 4.5l1.2-1.2c.2-.2.5-.2.7-.1l2 .9v2.1c0 .5-.4.9-.9.9A9.1 9.1 0 0 1 6.4 7.5c0-.5.4-.9.9-.9h2.1l.9 2c.1.2 0 .5-.1.7L9 8.5Z"/></svg>
+          </span>
+          <span>WhatsApp</span>
+        </a>
+        <a id="compartir-telegram" class="compartir__accion" href="#" target="_blank" rel="noopener noreferrer" data-compartir-accion>
+          <span class="compartir__icono" aria-hidden="true">
+            <svg viewBox="0 0 24 24" focusable="false"><path d="m3 11 17-7-4 16-5.5-5L8 18l.5-4.5L17 7 7 12l-4-1Z"/></svg>
+          </span>
+          <span>Telegram</span>
+        </a>
+        <a id="compartir-facebook" class="compartir__accion" href="#" target="_blank" rel="noopener noreferrer" data-compartir-accion>
+          <span class="compartir__icono" aria-hidden="true">
+            <svg viewBox="0 0 24 24" focusable="false"><path d="M14 21v-8h3l.5-3H14V8.2c0-.9.3-1.7 1.8-1.7H18V3.8c-.4-.1-1.5-.2-2.7-.2-2.7 0-4.5 1.6-4.5 4.6V10H8v3h2.8v8H14Z"/></svg>
+          </span>
+          <span>Facebook</span>
+        </a>
+        <a id="compartir-x" class="compartir__accion" href="#" target="_blank" rel="noopener noreferrer" data-compartir-accion>
+          <span class="compartir__icono" aria-hidden="true">
+            <svg viewBox="0 0 24 24" focusable="false"><path d="M5 4l14 16M19 4 5 20"/></svg>
+          </span>
+          <span>X</span>
+        </a>
+        <a id="compartir-correo" class="compartir__accion" href="mailto:" data-compartir-accion>
+          <span class="compartir__icono" aria-hidden="true">
+            <svg viewBox="0 0 24 24" focusable="false"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="m4 7 8 6 8-6"/></svg>
+          </span>
+          <span>Correo</span>
+        </a>
+        <button id="compartir-copiar" class="compartir__accion" type="button" data-compartir-accion>
+          <span class="compartir__icono" aria-hidden="true">
+            <svg viewBox="0 0 24 24" focusable="false"><rect x="8" y="8" width="11" height="11" rx="2"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"/></svg>
+          </span>
+          <span>Copiar enlace</span>
+        </button>
+        <button id="compartir-mas-apps" class="compartir__accion" type="button" aria-describedby="disponibilidad-compartir" data-compartir-accion disabled>
+          <span class="compartir__icono" aria-hidden="true">
+            <svg viewBox="0 0 24 24" focusable="false"><path d="M12 15V3m0 0L8 7m4-4 4 4"/><path d="M5 11v8a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-8"/></svg>
+          </span>
+          <span>Más apps</span>
+        </button>
+      </div>
+
+      <p id="disponibilidad-compartir" class="compartir__disponibilidad">Más apps usa el selector de aplicaciones del sistema cuando el navegador lo ofrece.</p>
+      <div id="copia-manual" class="compartir__copia-manual" hidden>
+        <label for="campo-copia-manual">Copia manual del enlace</label>
+        <p id="instrucciones-copia-manual">No se pudo copiar automáticamente. El enlace está seleccionado; cópialo con el menú del dispositivo o con el teclado.</p>
+        <input id="campo-copia-manual" type="url" readonly aria-describedby="instrucciones-copia-manual">
+      </div>
+      <p id="estado-compartir" class="compartir__estado" role="status" aria-live="polite" aria-atomic="true"></p>
     </div>
   </dialog>
 

@@ -27,7 +27,9 @@ flowchart LR
 | `manifest.webmanifest` | Nombre, iconos, `standalone` y Window Controls Overlay |
 | `css/estilos.css` | Temas, diseño adaptable, zonas WCO, foco y página offline |
 
-La cabecera conserva exactamente cinco controles accesibles: instalar, compartir, tema, restablecer y ayuda. Compartir usa Web Share cuando está disponible; Clipboard API y `execCommand('copy')` son fallbacks y todos usan `window.location.href`. El feedback se publica en una región `status` viva.
+La cabecera conserva exactamente cinco controles accesibles: instalar, compartir, tema, restablecer y ayuda. Compartir abre un segundo `dialog`, independiente de Ayuda: centrado en escritorio y como hoja inferior en móvil. Sus siete acciones son WhatsApp, Telegram, Facebook, X, Correo, Copiar enlace y Más apps. Los destinos se codifican con `URLSearchParams` y se regeneran desde `window.location.href`; no incluyen datos del formulario ni enumeran aplicaciones instaladas. Los cuatro destinos HTTPS usan `noopener noreferrer` y solo navegan después de elegirlos.
+
+«Más apps» invoca Web Share directamente desde su propio click y queda deshabilitado con una explicación si la API no existe. `AbortError` es una cancelación neutral y ningún error activa una copia. «Copiar enlace» es la única ruta al portapapeles: Clipboard API, `execCommand('copy')` temporal y, si ambos fallan, un campo seleccionado con instrucciones accesibles. La hoja, Correo y la copia siguen disponibles offline; el service worker no precachea contenido de terceros. El feedback se publica en una región `status` viva propia y el foco vuelve al control superior al cerrar.
 
 Cuando la PWA instalada expone `navigator.windowControlsOverlay`, la cabecera usa las variables `titlebar-area-*`, zonas `drag`/`no-drag` y `geometrychange`. Sin esa API, la misma barra funciona como cabecera web.
 

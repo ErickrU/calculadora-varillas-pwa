@@ -104,7 +104,7 @@ No hay ruta de update, delete o cleanup. Cualquier recuperación de un intento p
 ./scripts/verify-site.sh <YOUR_CLOUDFRONT_HTTPS_URL>
 ```
 
-Comprueba HTTPS, cabeceras, manifest, service worker, CSS, JavaScript, iconos, cinco controles y Compartir con Web Share, Clipboard API, fallback y feedback accesible. El caso funcional debe seguir produciendo 8 barras, `As = 15 cm²` requerido y `16 cm²` colocado.
+Comprueba HTTPS, cabeceras, manifest, service worker, CSS, JavaScript, iconos, cinco controles y la hoja de Compartir: siete acciones, destinos oficiales codificados desde la URL actual, enlaces externos seguros, Web Share y copia bajo gestos separados, cancelación neutral y fallback de selección manual. La allowlist sigue conteniendo exactamente 13 archivos y no incorpora contenido de terceros. El caso funcional debe seguir produciendo 8 barras, `As = 15 cm²` requerido y `16 cm²` colocado.
 
 ## Fuentes
 

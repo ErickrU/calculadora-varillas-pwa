@@ -32,9 +32,9 @@ bash -n scripts/deploy-aws.sh scripts/verify-site.sh
 shellcheck scripts/deploy-aws.sh scripts/verify-site.sh
 ```
 
-La suite comprueba el caso rectangular `30 × 50 cm`, cuantía `1 %`, barra `5/8"`: `ok=true`, 8 barras, `As` requerido de `15 cm²` y colocado de `16 cm²`. También exige exactamente cinco controles, un solo Compartir, Web Share, Clipboard API, `execCommand('copy')`, URL actual, feedback accesible y Window Controls Overlay.
+La suite comprueba el caso rectangular `30 × 50 cm`, cuantía `1 %`, barra `5/8"`: `ok=true`, 8 barras, `As` requerido de `15 cm²` y colocado de `16 cm²`. También exige exactamente cinco controles, un solo Compartir, una hoja accesible con siete acciones, destinos codificados desde la URL actual, enlaces externos seguros, Web Share únicamente desde «Más apps», copia únicamente desde «Copiar enlace», cancelación neutral, selección manual final, feedback accesible y Window Controls Overlay.
 
-Después, prueba en el navegador geometrías y métodos distintos, validaciones, presentación adaptable, teclado, instalación, uso offline y actualización del service worker cuando corresponda.
+Después, prueba en el navegador geometrías y métodos distintos, validaciones, presentación adaptable, teclado, la hoja centrada en escritorio y anclada abajo en móvil, foco inicial y de retorno, instalación, uso offline y actualización del service worker cuando corresponda. Abrir la hoja no debe copiar, invocar Web Share ni solicitar contenido de terceros.
 
 ## Infraestructura
 

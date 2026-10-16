@@ -11,10 +11,24 @@ const btnRestablecer = document.getElementById('control-restablecer');
 const btnAyuda = document.getElementById('control-ayuda');
 const dialogoAyuda = document.getElementById('dialogo-ayuda');
 const btnCerrarAyuda = document.getElementById('cerrar-ayuda');
+const dialogoCompartir = document.getElementById('dialogo-compartir');
+const btnCerrarCompartir = document.getElementById('cerrar-compartir');
+const enlaceWhatsapp = document.getElementById('compartir-whatsapp');
+const enlaceTelegram = document.getElementById('compartir-telegram');
+const enlaceFacebook = document.getElementById('compartir-facebook');
+const enlaceX = document.getElementById('compartir-x');
+const enlaceCorreo = document.getElementById('compartir-correo');
+const btnCopiarEnlace = document.getElementById('compartir-copiar');
+const btnMasApps = document.getElementById('compartir-mas-apps');
+const disponibilidadCompartir = document.getElementById('disponibilidad-compartir');
+const estadoCompartir = document.getElementById('estado-compartir');
+const bloqueCopiaManual = document.getElementById('copia-manual');
+const campoCopiaManual = document.getElementById('campo-copia-manual');
 const chipConexion = document.getElementById('chip-conexion');
 
+const TEXTO_COMPARTIR = 'Calcula el refuerzo longitudinal de columnas de concreto armado.';
 let promptInstalacion = null;
-let focoAntesDelDialogo = null;
+let focoAntesDeAyuda = null;
 let temporizadorGeometria = null;
 
 const anunciar = (texto) => { if (estadoSw) estadoSw.textContent = texto; };
@@ -122,6 +136,76 @@ window.addEventListener('appinstalled', () => {
 /* ================================================================
    3. Compartir, tema, restablecer y ayuda
    ================================================================ */
+function actualizarEstadoCompartir(texto, tipo = '') {
+  if (!estadoCompartir) return;
+  estadoCompartir.textContent = texto;
+  if (tipo) estadoCompartir.dataset.tipo = tipo;
+  else delete estadoCompartir.dataset.tipo;
+}
+
+function destinoConParametros(base, parametros) {
+  const destino = new URL(base);
+  destino.search = new URLSearchParams(parametros).toString();
+  return destino.toString();
+}
+
+function regenerarDestinos() {
+  const enlace = window.location.href;
+  if (enlaceWhatsapp) {
+    enlaceWhatsapp.href = destinoConParametros('https://wa.me/', {
+      text: `${TEXTO_COMPARTIR}\n${enlace}`,
+    });
+  }
+  if (enlaceTelegram) {
+    enlaceTelegram.href = destinoConParametros('https://t.me/share/url', {
+      url: enlace,
+      text: TEXTO_COMPARTIR,
+    });
+  }
+  if (enlaceFacebook) {
+    enlaceFacebook.href = destinoConParametros('https://www.facebook.com/sharer/sharer.php', {
+      u: enlace,
+    });
+  }
+  if (enlaceX) {
+    enlaceX.href = destinoConParametros('https://twitter.com/intent/tweet', {
+      url: enlace,
+      text: TEXTO_COMPARTIR,
+    });
+  }
+  if (enlaceCorreo) {
+    const parametros = new URLSearchParams({
+      subject: 'Calculadora de Varillas',
+      body: `${TEXTO_COMPARTIR}\n\n${enlace}`,
+    });
+    enlaceCorreo.href = `mailto:?${parametros.toString()}`;
+  }
+}
+
+function actualizarMasApps() {
+  const disponible = typeof navigator.share === 'function';
+  if (btnMasApps) btnMasApps.disabled = !disponible;
+  if (!disponibilidadCompartir) return;
+  disponibilidadCompartir.textContent = disponible
+    ? 'Más apps abre el selector de aplicaciones del sistema.'
+    : 'Más apps no está disponible en este navegador; las demás opciones siguen funcionando.';
+}
+
+function limpiarHojaCompartir() {
+  actualizarEstadoCompartir('');
+  if (bloqueCopiaManual) bloqueCopiaManual.hidden = true;
+  if (campoCopiaManual) campoCopiaManual.value = '';
+}
+
+function abrirCompartir() {
+  if (!dialogoCompartir || dialogoCompartir.open || dialogoAyuda?.open) return;
+  limpiarHojaCompartir();
+  regenerarDestinos();
+  actualizarMasApps();
+  dialogoCompartir.showModal();
+  enlaceWhatsapp?.focus();
+}
+
 function copiarConComando(enlace) {
   const campo = document.createElement('textarea');
   campo.value = enlace;
@@ -136,46 +220,86 @@ function copiarConComando(enlace) {
   if (!copiado) throw new Error('No se pudo copiar el enlace');
 }
 
+function mostrarCopiaManual(enlace) {
+  if (!bloqueCopiaManual || !campoCopiaManual) {
+    actualizarEstadoCompartir('No se pudo copiar. Selecciona la dirección desde el navegador.', 'error');
+    return;
+  }
+  bloqueCopiaManual.hidden = false;
+  campoCopiaManual.value = enlace;
+  campoCopiaManual.focus();
+  campoCopiaManual.select();
+  campoCopiaManual.setSelectionRange(0, campoCopiaManual.value.length);
+  actualizarEstadoCompartir('Copia manual disponible: el enlace está seleccionado.', 'error');
+}
+
 async function copiarEnlace() {
   const enlace = window.location.href;
+  if (bloqueCopiaManual) bloqueCopiaManual.hidden = true;
+
   if (navigator.clipboard?.writeText) {
     try {
       await navigator.clipboard.writeText(enlace);
+      actualizarEstadoCompartir('Enlace copiado al portapapeles.', 'exito');
       return;
     } catch {
       // Continúa con el fallback compatible con navegadores anteriores.
     }
   }
 
-  copiarConComando(enlace);
+  try {
+    copiarConComando(enlace);
+    actualizarEstadoCompartir('Enlace copiado al portapapeles.', 'exito');
+  } catch {
+    mostrarCopiaManual(enlace);
+  }
 }
 
-btnCompartir?.addEventListener('click', async () => {
-  try {
-    if (typeof navigator.share === 'function') {
-      await navigator.share({
-        title: document.title,
-        text: 'Calcula el refuerzo longitudinal de columnas de concreto armado.',
-        url: window.location.href,
-      });
-      anunciar('La calculadora se compartió correctamente.');
-    } else {
-      await copiarEnlace();
-      anunciar('Enlace copiado al portapapeles.');
-    }
-  } catch (error) {
-    if (error.name === 'AbortError') {
-      anunciar('Se canceló la acción de compartir.');
-      return;
-    }
-    try {
-      await copiarEnlace();
-      anunciar('Enlace copiado al portapapeles.');
-    } catch {
-      anunciar('No se pudo compartir. Copia la dirección desde el navegador.');
-    }
+function manejarErrorCompartir(error) {
+  if (error?.name === 'AbortError') {
+    actualizarEstadoCompartir('Cerraste el selector sin compartir. Puedes elegir otra opción.');
+    return;
   }
+  actualizarEstadoCompartir('No se pudo abrir el selector del sistema. Prueba otra opción.', 'error');
+}
+
+btnCompartir?.addEventListener('click', abrirCompartir);
+btnCerrarCompartir?.addEventListener('click', () => dialogoCompartir.close());
+btnCopiarEnlace?.addEventListener('click', copiarEnlace);
+btnMasApps?.addEventListener('click', () => {
+  if (typeof navigator.share !== 'function') {
+    actualizarMasApps();
+    actualizarEstadoCompartir('Más apps no está disponible en este navegador.', 'error');
+    return;
+  }
+
+  let resultado;
+  try {
+    resultado = navigator.share({
+      title: document.title,
+      text: TEXTO_COMPARTIR,
+      url: window.location.href,
+    });
+  } catch (error) {
+    manejarErrorCompartir(error);
+    return;
+  }
+
+  Promise.resolve(resultado)
+    .then(() => {
+      anunciar('La calculadora se compartió correctamente.');
+      if (dialogoCompartir.open) dialogoCompartir.close();
+    })
+    .catch(manejarErrorCompartir);
 });
+
+dialogoCompartir?.querySelectorAll('a[data-compartir-accion]').forEach((enlace) => {
+  enlace.addEventListener('click', () => dialogoCompartir.close());
+});
+dialogoCompartir?.addEventListener('click', (evento) => {
+  if (evento.target === dialogoCompartir) dialogoCompartir.close();
+});
+dialogoCompartir?.addEventListener('close', () => btnCompartir?.focus());
 
 function aplicarTema(tema, guardar = true) {
   raiz.dataset.tema = tema;
@@ -202,9 +326,10 @@ btnRestablecer?.addEventListener('click', () => {
 });
 
 function abrirAyuda() {
-  focoAntesDelDialogo = document.activeElement;
+  if (!dialogoAyuda || dialogoAyuda.open || dialogoCompartir?.open) return;
+  focoAntesDeAyuda = document.activeElement;
   dialogoAyuda.showModal();
-  btnCerrarAyuda.focus();
+  btnCerrarAyuda?.focus();
 }
 
 btnAyuda?.addEventListener('click', abrirAyuda);
@@ -213,7 +338,7 @@ dialogoAyuda?.addEventListener('click', (evento) => {
   if (evento.target === dialogoAyuda) dialogoAyuda.close();
 });
 dialogoAyuda?.addEventListener('close', () => {
-  if (focoAntesDelDialogo?.isConnected) focoAntesDelDialogo.focus();
+  if (focoAntesDeAyuda?.isConnected) focoAntesDeAyuda.focus();
 });
 
 /* ================================================================

@@ -12,7 +12,9 @@ La aplicación es estática y ejecuta todos los cálculos en el navegador:
 - no transmite los valores del formulario;
 - no usa dependencias JavaScript de terceros ni recursos de CDN;
 - el service worker solo intercepta solicitudes `GET` del mismo origen;
-- Compartir usa la URL actual y anuncia el resultado en una región viva;
+- Compartir abre una hoja local y solo prepara destinos oficiales con `URLSearchParams` a partir de `window.location.href`;
+- los destinos externos, Web Share y Clipboard solo se activan tras elegir su acción; no se enumeran aplicaciones instaladas, una cancelación nativa no copia y el fallback final muestra una selección manual;
+- el service worker no precachea SDK, páginas ni respuestas de redes sociales;
 - no se deben introducir secretos en HTML, JavaScript, el manifest ni Git.
 
 La alternativa AWS mantiene:

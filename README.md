@@ -21,7 +21,8 @@ El código público vive en [`ErickrU/calculadora-varillas-pwa`](https://github.
 - diseño adaptable para celular y escritorio, con tema oscuro o claro persistente;
 - barra accesible con exactamente cinco controles: instalar, compartir, cambiar tema, restablecer y abrir ayuda;
 - integración con Window Controls Overlay al instalarla y cabecera completa de respaldo en pestañas y navegadores sin esa API;
-- Web Share API con Clipboard API y `execCommand('copy')` como fallbacks, siempre con la URL actual;
+- hoja propia de Compartir con WhatsApp, Telegram, Facebook, X, Correo y copia explícita, siempre a partir de `window.location.href`;
+- «Más apps» abre Web Share solo cuando el navegador lo ofrece, sin enumerar aplicaciones instaladas; cancelar no copia y los fallos de Clipboard terminan en `execCommand('copy')` o selección manual;
 - instalable y completamente funcional sin conexión después de la primera visita;
 - cálculo local: no envía ni almacena los datos del formulario;
 - alternativa AWS con S3 privado, CloudFront y OAC.

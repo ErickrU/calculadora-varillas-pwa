@@ -484,6 +484,7 @@ html[data-tema="claro"] body {
 dialog {
   width: min(560px, calc(100% - 32px));
   max-height: calc(100dvh - 32px);
+  margin: auto;
   padding: 0;
   overflow: auto;
   border: 1px solid var(--borde-fuerte);
@@ -510,6 +511,173 @@ dialog {
   font: inherit;
   font-size: 1.6rem;
   cursor: pointer;
+  -webkit-app-region: no-drag;
+  app-region: no-drag;
+}
+.dialogo__cerrar:hover { color: var(--ambar); border-color: var(--borde-fuerte); }
+
+/* ------------------------------ Hoja Compartir -------------------------- */
+#dialogo-compartir {
+  width: min(640px, calc(100% - 32px));
+  overflow-x: hidden;
+  overscroll-behavior: contain;
+}
+#dialogo-compartir[open] { animation: dialogo-compartir-entrada 0.18s ease-out; }
+@keyframes dialogo-compartir-entrada {
+  from { opacity: 0; transform: translateY(12px) scale(0.98); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+.compartir__contenido {
+  position: relative;
+  padding: clamp(22px, 5vw, 34px);
+}
+.compartir__contenido h2 {
+  margin: 0 48px 6px 0;
+  color: var(--ambar);
+  font-size: 1.35rem;
+}
+.compartir__asa {
+  display: none;
+  width: 44px;
+  height: 5px;
+  margin: 0 auto 14px;
+  border-radius: 999px;
+  background: var(--borde-fuerte);
+}
+.compartir__descripcion {
+  max-width: 56ch;
+  color: var(--texto-suave);
+  font-size: 0.92rem;
+}
+.compartir__acciones {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 20px;
+}
+.compartir__accion {
+  display: flex;
+  min-width: 0;
+  min-height: 96px;
+  padding: 10px 5px;
+  align-items: center;
+  justify-content: flex-start;
+  flex-direction: column;
+  gap: 8px;
+  border: 1px solid var(--borde-neutro);
+  border-radius: var(--radio-sm);
+  background: var(--panel-2);
+  color: var(--texto);
+  font: inherit;
+  font-size: 0.82rem;
+  font-weight: 700;
+  line-height: 1.2;
+  text-align: center;
+  text-decoration: none;
+  overflow-wrap: anywhere;
+  cursor: pointer;
+  -webkit-app-region: no-drag;
+  app-region: no-drag;
+  transition: transform 0.12s, color 0.15s, background-color 0.15s, border-color 0.15s;
+}
+.compartir__accion:hover:not(:disabled) {
+  color: var(--ambar);
+  background: rgba(242, 169, 59, 0.10);
+  border-color: var(--borde-fuerte);
+  transform: translateY(-1px);
+}
+.compartir__accion:active:not(:disabled) { transform: translateY(1px); }
+.compartir__accion:disabled { opacity: 0.52; cursor: not-allowed; }
+.compartir__icono {
+  display: grid;
+  place-items: center;
+  width: 48px;
+  height: 48px;
+  flex: none;
+  border: 1px solid var(--borde-fuerte);
+  border-radius: 50%;
+  background: var(--fondo-800);
+  color: var(--ambar);
+}
+.compartir__icono svg {
+  width: 25px;
+  height: 25px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.7;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+#compartir-facebook .compartir__icono svg { fill: currentColor; stroke: none; }
+.compartir__disponibilidad {
+  margin-top: 14px;
+  color: var(--texto-suave);
+  font-size: 0.82rem;
+}
+.compartir__copia-manual {
+  display: grid;
+  gap: 7px;
+  margin-top: 16px;
+  padding: 12px;
+  border: 1px solid var(--borde-fuerte);
+  border-radius: var(--radio-sm);
+  background: rgba(242, 169, 59, 0.08);
+}
+.compartir__copia-manual label { font-size: 0.9rem; font-weight: 700; }
+.compartir__copia-manual p { color: var(--texto-suave); font-size: 0.82rem; }
+.compartir__copia-manual input {
+  width: 100%;
+  min-height: 44px;
+  padding: 9px 11px;
+  border: 1px solid var(--borde-neutro);
+  border-radius: var(--radio-sm);
+  background: var(--fondo-800);
+  color: var(--texto);
+  font: 0.86rem var(--mono);
+}
+.compartir__estado {
+  min-height: 1.5em;
+  margin-top: 12px;
+  color: var(--texto-suave);
+  font-size: 0.88rem;
+  font-weight: 600;
+}
+.compartir__estado[data-tipo="exito"] { color: var(--verde); }
+.compartir__estado[data-tipo="error"] { color: var(--rojo); }
+
+@media (max-width: 640px), (hover: none) and (pointer: coarse) {
+  #dialogo-compartir {
+    width: 100%;
+    max-width: 100%;
+    max-height: min(88dvh, 720px);
+    margin: auto 0 0;
+    border-right: 0;
+    border-bottom: 0;
+    border-left: 0;
+    border-radius: 20px 20px 0 0;
+  }
+  #dialogo-compartir[open] { animation-name: dialogo-compartir-movil; }
+  @keyframes dialogo-compartir-movil {
+    from { opacity: 0; transform: translateY(24px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+  .compartir__contenido {
+    padding: 10px max(16px, env(safe-area-inset-right)) max(20px, env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left));
+  }
+  .compartir__asa { display: block; }
+  .compartir__contenido h2 { font-size: 1.2rem; }
+  .compartir__acciones { margin-top: 16px; gap: 8px; }
+  .compartir__accion { min-height: 92px; font-size: 0.78rem; }
+}
+
+@media (max-width: 350px) {
+  .compartir__acciones { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}
+
+@media (forced-colors: active) {
+  .compartir__accion,
+  .compartir__icono,
+  .compartir__copia-manual { border-color: ButtonText; }
 }
 
 .campo-copia-portapapeles {
