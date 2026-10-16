@@ -125,13 +125,15 @@ calculadora-varillas-pwa/
 
 ## Alternativa AWS
 
-Este workflow preparó y verificó el código solo localmente: **no hizo llamadas AWS**. El intento `calculadora-varillas-pwa-public-prod` queda bloqueado e intacto. El único target futuro propuesto es `calculadora-varillas-pwa-public-prod-v2`; si una comprobación futura encuentra ese nombre o no puede demostrar su ausencia de forma inequívoca, el resultado es `STOP`, sin update, nombre alternativo, eliminación ni cleanup.
+Este workflow preparó y verificó el código solo localmente: **no hizo llamadas AWS**. Los nombres reales no se guardan en el repositorio: cada operación futura exige `--stack-name <AUTHORIZED_STACK_NAME>` y `--blocked-stack-name <BLOCKED_STACK_NAME>`. Ambos deben ser distintos; si no puede demostrarse la ausencia del target autorizado, el resultado es `STOP`, sin update, nombre alternativo, eliminación ni cleanup.
 
 Una operación futura comienza obteniendo hashes de commit, plantilla e identidad:
 
 ```bash
 ./scripts/deploy-aws.sh \
   --phase review \
+  --stack-name <AUTHORIZED_STACK_NAME> \
+  --blocked-stack-name <BLOCKED_STACK_NAME> \
   --profile <YOUR_AWS_PROFILE> \
   --region <YOUR_AWS_REGION>
 ```

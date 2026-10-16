@@ -1,11 +1,21 @@
 import { createHash } from 'node:crypto';
 
+const stackNamePattern = /^[A-Za-z][A-Za-z0-9-]{0,127}$/;
+const stackName = process.env.AWS_STACK_NAME;
+const blockedStackName = process.env.AWS_BLOCKED_STACK_NAME;
+if (!stackNamePattern.test(stackName ?? '') || !stackNamePattern.test(blockedStackName ?? '')) {
+  throw new Error('AWS_STACK_NAME y AWS_BLOCKED_STACK_NAME deben contener nombres de stack explícitos y válidos.');
+}
+if (stackName === blockedStackName) {
+  throw new Error('AWS_STACK_NAME no puede coincidir con AWS_BLOCKED_STACK_NAME.');
+}
+
 export const CONTRACT = Object.freeze({
   schemaVersion: 1,
   project: 'calculadora-varillas-pwa',
   repository: 'ErickrU-calculadora-varillas-pwa',
-  stackName: 'calculadora-varillas-pwa-public-prod-v2',
-  blockedStackName: 'calculadora-varillas-pwa-public-prod',
+  stackName,
+  blockedStackName,
   environment: 'prod',
   priceClass: 'PriceClass_100',
   maxFreshnessMs: 300_000,

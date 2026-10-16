@@ -115,15 +115,18 @@ function utc(base, seconds) {
   return new Date(base + (seconds * 1000)).toISOString().replace('.000Z', 'Z');
 }
 
-test('el target v2 y sus parámetros de producción están fijados internamente', () => {
-  assert.equal(CONTRACT.stackName, 'calculadora-varillas-pwa-public-prod-v2');
-  assert.equal(CONTRACT.blockedStackName, 'calculadora-varillas-pwa-public-prod');
-  assert.match(script, /^TARGET_STACK='calculadora-varillas-pwa-public-prod-v2'$/m);
-  assert.match(script, /^BLOCKED_STACK='calculadora-varillas-pwa-public-prod'$/m);
+test('los nombres de stack son entradas obligatorias y los parámetros de producción permanecen fijos', () => {
+  assert.equal(CONTRACT.stackName, 'fixture-target-not-for-deployment');
+  assert.equal(CONTRACT.blockedStackName, 'fixture-blocked-not-for-deployment');
+  assert.match(script, /^TARGET_STACK=''$/m);
+  assert.match(script, /^BLOCKED_STACK=''$/m);
+  assert.match(script, /--stack-name\) \[\[ \$# -ge 2 \]\] \|\| fail/);
+  assert.match(script, /--blocked-stack-name\) \[\[ \$# -ge 2 \]\] \|\| fail/);
+  assert.match(script, /AWS_STACK_NAME="\$TARGET_STACK"/);
+  assert.match(script, /AWS_BLOCKED_STACK_NAME="\$BLOCKED_STACK"/);
   assert.match(script, /^ENVIRONMENT='prod'$/m);
   assert.match(script, /^PRICE_CLASS='PriceClass_100'$/m);
   assert.match(script, /\[\[ "\$TARGET_STACK" != "\$BLOCKED_STACK" \]\]/);
-  assert.doesNotMatch(script, /--stack\)/);
   assert.doesNotMatch(script, /--environment\)/);
   assert.doesNotMatch(script, /--price-class\)/);
   assert.match(script, /el resultado siempre es STOP/);
@@ -131,10 +134,8 @@ test('el target v2 y sus parámetros de producción están fijados internamente'
 });
 
 test('ninguna llamada futura puede usar el nombre bloqueado', () => {
-  const commandLines = script.split('\n').filter((line) => line.includes('${AWS[@]}') || line.includes('--stack-name'));
-  assert.ok(commandLines.some((line) => line.includes('$TARGET_STACK')));
-  assert.equal(commandLines.some((line) => line.includes('$BLOCKED_STACK')), false);
-  assert.doesNotMatch(script, /--stack-name\s+['"]?calculadora-varillas-pwa-public-prod['"]?(?:\s|$)/);
+  assert.match(script, /\$\{AWS\[@\]\}[\s\S]{0,200}--stack-name "\$TARGET_STACK"/);
+  assert.doesNotMatch(script, /--stack-name "\$BLOCKED_STACK"/);
   assert.doesNotMatch(script, /delete-change-set|delete-stack|update-stack/);
 });
 

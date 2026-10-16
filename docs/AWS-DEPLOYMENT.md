@@ -1,16 +1,16 @@
 # Despliegue AWS seguro
 
-Esta alternativa propone crear una instancia nueva de Calculadora de Varillas con S3 privado y CloudFront OAC. El único target futuro permitido es `calculadora-varillas-pwa-public-prod-v2`; esto no demuestra que esté libre ni que exista un despliegue activo.
+Esta alternativa propone crear una instancia nueva de Calculadora de Varillas con S3 privado y CloudFront OAC. El script no contiene nombres reales: exige un target autorizado y un intento bloqueado distintos en runtime; esto no demuestra que el target esté libre ni que exista un despliegue activo.
 
 > Este workflow preparó y verificó código exclusivamente de forma local: no hizo llamadas AWS. Toda operación futura requiere credenciales temporales de mínimo privilegio, revisión independiente y autorización trazable.
 
 ## Intento bloqueado y regla de parada
 
-`calculadora-varillas-pwa-public-prod` es un intento bloqueado que debe permanecer intacto: el script nunca lo consulta, ejecuta, actualiza, elimina ni reutiliza.
+`--blocked-stack-name <BLOCKED_STACK_NAME>` identifica el intento que debe permanecer intacto: el script nunca lo consulta, ejecuta, actualiza, elimina ni reutiliza.
 
-`calculadora-varillas-pwa-public-prod-v2` solo puede usarse si una fase `prepare` futura todavía demuestra su ausencia inmediatamente antes de crear. Si `DescribeStacks` o `ListChangeSets` encuentra el nombre, devuelve un resultado ambiguo o no puede correlacionarse, el resultado es **STOP**. El script nunca actualiza un stack existente, elige otro nombre, elimina un intento ni realiza cleanup automático.
+`--stack-name <AUTHORIZED_STACK_NAME>` identifica el target y solo puede usarse si una fase `prepare` futura todavía demuestra su ausencia inmediatamente antes de crear. Si `DescribeStacks` o `ListChangeSets` encuentra el nombre, devuelve un resultado ambiguo o no puede correlacionarse, el resultado es **STOP**. El script nunca actualiza un stack existente, elige otro nombre, elimina un intento ni realiza cleanup automático.
 
-Stack v2, entorno `prod`, `PriceClass_100`, tipo `CREATE`, nombre del change set y client token son internos. No existen opciones para inyectarlos.
+Ambos nombres son entradas runtime obligatorias sin valores predeterminados y no pueden coincidir. Entorno `prod`, `PriceClass_100`, tipo `CREATE`, nombre del change set y client token permanecen internos.
 
 ## Controles conservados
 
@@ -40,17 +40,21 @@ Una persona autorizada puede obtener los hashes sin crear, actualizar o eliminar
 ```bash
 ./scripts/deploy-aws.sh \
   --phase review \
+  --stack-name <AUTHORIZED_STACK_NAME> \
+  --blocked-stack-name <BLOCKED_STACK_NAME> \
   --profile <YOUR_AWS_PROFILE> \
   --region <YOUR_AWS_REGION>
 ```
 
-Esta fase consultará la identidad activa en AWS cuando se ejecute en el futuro. Muestra únicamente hashes del commit, plantilla e identidad canónica. La identidad liga cuenta, principal, profile y región; los valores completos quedan fuera de reportes compartibles. `review` no decide que v2 esté libre.
+Esta fase consultará la identidad activa en AWS cuando se ejecute en el futuro. Muestra únicamente hashes del commit, plantilla e identidad canónica. La identidad liga cuenta, principal, profile y región; los valores completos quedan fuera de reportes compartibles. `review` no decide que el target autorizado esté libre.
 
 ## 2. Preparar un CREATE sin ejecutarlo
 
 ```bash
 ./scripts/deploy-aws.sh \
   --phase prepare \
+  --stack-name <AUTHORIZED_STACK_NAME> \
+  --blocked-stack-name <BLOCKED_STACK_NAME> \
   --profile <YOUR_AWS_PROFILE> \
   --region <YOUR_AWS_REGION> \
   --confirm-commit-sha <APPROVED_COMMIT_SHA> \
@@ -80,13 +84,15 @@ Los campos de CloudTrail que no estén garantizados pueden faltar; cualquier val
 ```bash
 ./scripts/deploy-aws.sh \
   --phase execute \
+  --stack-name <AUTHORIZED_STACK_NAME> \
+  --blocked-stack-name <BLOCKED_STACK_NAME> \
   --profile <YOUR_AWS_PROFILE> \
   --region <YOUR_AWS_REGION> \
   --confirm-commit-sha <APPROVED_COMMIT_SHA> \
   --confirm-identity-sha <APPROVED_IDENTITY_SHA256>
 ```
 
-Antes de cualquier llamada AWS de la fase `execute`, un guard puramente local rechaza symlinks y modos inseguros, verifica `chain-input-prepare.json` y `chain-prepare.json`, exige que esta última selle `proof-prepare.json`, y compara exactamente puntero, `attempt.json` y prueba: attempt ID, target v2, stack ID, change set ID/nombre, client token, profile, región, commit, identidad y plantilla. Solo los IDs derivados de esa evidencia sellada se usan para volver a consultar identidad, template remoto, placeholder vacío, único change set, descripción, parámetros, tags, modo `STANDARD`, `OnStackFailure`, opciones vacías y cinco acciones.
+Antes de cualquier llamada AWS de la fase `execute`, un guard puramente local rechaza symlinks y modos inseguros, verifica `chain-input-prepare.json` y `chain-prepare.json`, exige que esta última selle `proof-prepare.json`, y compara exactamente puntero, `attempt.json` y prueba: attempt ID, target autorizado, stack ID, change set ID/nombre, client token, profile, región, commit, identidad y plantilla. Solo los IDs derivados de esa evidencia sellada se usan para volver a consultar identidad, template remoto, placeholder vacío, único change set, descripción, parámetros, tags, modo `STANDARD`, `OnStackFailure`, opciones vacías y cinco acciones.
 
 Después del snapshot TOCTOU, el script crea `proof-execute.json` y una `chain-execute-reviewed.json` que lo sella. Un guard preliminar verifica toda la cadena, vuelve a validar la conjunción y deriva stack, change set y token de la prueba sellada. El guard de lanzamiento ejecuta de nuevo la validación completa sin recibir una hora externa. Cuando esa validación y sus comprobaciones de integridad terminan, obtiene internamente una hora UTC nueva y vuelve a exigir con ella que todas las observaciones del snapshot, desde la primera hasta la última, tengan como máximo 300 segundos. Solo entonces escribe la autorización y emite esa hora para iniciar la captura de `execute-change-set`. Si el snapshot vence dentro del propio guard, no se crea la autorización y el proceso AWS no comienza. `execute-change-set` consume los valores derivados de la prueba sellada y su captura queda ligada a esa hora final. Cualquier symlink, hash alterado, dato discordante, ausencia, contradicción o demora produce STOP y conserva todo.
 

@@ -29,7 +29,7 @@ La alternativa AWS mantiene:
 
 ## Evidencia y operaciones AWS
 
-Este workflow no hizo llamadas AWS. `calculadora-varillas-pwa-public-prod` es un intento bloqueado que permanece intacto. El único target futuro propuesto es `calculadora-varillas-pwa-public-prod-v2`; cualquier existencia o resultado ambiguo obliga a `STOP`, sin update, nombre alternativo, eliminación ni cleanup.
+Este workflow no hizo llamadas AWS. Los nombres reales no se guardan en el repositorio: una operación futura debe proporcionar un target autorizado y el intento bloqueado mediante argumentos runtime obligatorios y distintos. Cualquier existencia del target o resultado ambiguo obliga a `STOP`, sin update, nombre alternativo, eliminación ni cleanup.
 
 El script exige profile explícito, commit e identidad aprobados y una plantilla ASCII+LF idéntica al blob revisado. Genera internamente attempt ID, nombre de change set y client token. Antes de crear exige `DescribeStacks` y `ListChangeSets` inmediatamente anteriores, y luego correlaciona CloudTrail por identidad, cuenta, región, tiempo, request ID, stack, nombre, token y respuesta.
 

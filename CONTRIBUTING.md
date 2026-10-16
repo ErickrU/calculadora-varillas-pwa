@@ -40,7 +40,7 @@ Después, prueba en el navegador geometrías y métodos distintos, validaciones,
 
 Este workflow no hizo llamadas AWS. Las pruebas AWS usan únicamente módulos puros y fixtures sintéticos; no ejecutes `scripts/deploy-aws.sh` para validar un cambio de código.
 
-El intento `calculadora-varillas-pwa-public-prod` está bloqueado y debe permanecer intacto. El único target futuro del script es `calculadora-varillas-pwa-public-prod-v2`; si existe o la ausencia no puede corroborarse, se detiene sin update, cambio de nombre, delete ni cleanup. El invocador no controla stack, entorno, price class, nombre de change set o client token.
+Los nombres reales no se conservan en Git. Una operación futura debe proporcionar `--stack-name <AUTHORIZED_STACK_NAME>` y `--blocked-stack-name <BLOCKED_STACK_NAME>`; ambos deben ser distintos. Si no puede corroborarse la ausencia del target autorizado, el script se detiene sin update, cambio de nombre, delete ni cleanup. El invocador no controla entorno, price class, nombre de change set o client token.
 
 Una operación futura autorizada exige profile y región explícitos, commit e identidad aprobados, repositorio limpio, dos pruebas de ausencia, correlación CloudTrail, plantilla idéntica byte por byte, `CREATE`, `DO_NOTHING`, exactamente cinco `Add` allowlisted y un guard TOCTOU fresco. `ChangeSetType` puede faltar en `DescribeChangeSet`; una contradicción sí debe fallar.
 

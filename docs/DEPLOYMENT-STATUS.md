@@ -4,11 +4,11 @@
 
 Este repositorio no registra ni afirma un despliegue AWS activo. Este workflow no hizo llamadas AWS. No contiene cuentas, ARN, buckets físicos, IDs de distribución, tokens, outputs ni URL reales de recursos.
 
-`calculadora-varillas-pwa-public-prod` es un intento bloqueado que permanece intacto y sobre el cual el script no realiza ninguna operación. El único target futuro propuesto es `calculadora-varillas-pwa-public-prod-v2`. Una fase `prepare` debe probar su ausencia mediante `DescribeStacks` **y** `ListChangeSets`, además de correlacionar CloudTrail. Si v2 existe o la prueba es incompleta, el resultado obligatorio es STOP; nunca update ni cambio automático de nombre.
+Los nombres reales se proporcionan exclusivamente en runtime: `--stack-name <AUTHORIZED_STACK_NAME>` identifica el target futuro y `--blocked-stack-name <BLOCKED_STACK_NAME>` identifica el intento que debe permanecer intacto. Una fase `prepare` debe probar la ausencia del target autorizado mediante `DescribeStacks` **y** `ListChangeSets`, además de correlacionar CloudTrail. Si la prueba es incompleta, el resultado obligatorio es STOP; nunca update ni cambio automático de nombre.
 
 ## Evidencia local esperada
 
-Cada intento futuro conserva datos completos únicamente en `.aws-attempts/<attempt-id>/` (`0700`, archivos `0600`) y en `.aws-change-set.json` (`0600`). Incluye timestamps UTC, profile, región, identidad normalizada, target v2, nombre de change set, client token, request/respuesta, inicio real de cada captura, template y commit SHA, respuestas remotas y una cadena de hashes write-once. Los reportes compartibles contienen solo hashes y booleanos.
+Cada intento futuro conserva datos completos únicamente en `.aws-attempts/<attempt-id>/` (`0700`, archivos `0600`) y en `.aws-change-set.json` (`0600`). Incluye timestamps UTC, profile, región, identidad normalizada, target autorizado, nombre de change set, client token, request/respuesta, inicio real de cada captura, template y commit SHA, respuestas remotas y una cadena de hashes write-once. Los reportes compartibles contienen solo hashes y booleanos.
 
 Un intento fallido queda intacto y bloquea reintentos automáticos. `DO_NOTHING`, `DeletionPolicy: Retain`, `UpdateReplacePolicy: Retain`, versionado y recursos parciales pueden conservar costos. No existe cleanup automático; la recuperación exige una autorización posterior separada.
 

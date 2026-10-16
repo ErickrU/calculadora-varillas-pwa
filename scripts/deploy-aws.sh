@@ -10,8 +10,8 @@ VALIDATOR="$ROOT/scripts/validate-aws-proof.mjs"
 ATTEMPTS_ROOT="$ROOT/.aws-attempts"
 CHANGE_STATE="$ROOT/.aws-change-set.json"
 DEPLOYMENT_STATE="$ROOT/.aws-deployment.json"
-TARGET_STACK='calculadora-varillas-pwa-public-prod-v2'
-BLOCKED_STACK='calculadora-varillas-pwa-public-prod'
+TARGET_STACK=''
+BLOCKED_STACK=''
 ENVIRONMENT='prod'
 PRICE_CLASS='PriceClass_100'
 MARKER='calculadora-varillas-pwa-cloudfront-oac-v1'
@@ -32,31 +32,39 @@ usage() {
   cat <<'USAGE'
 Revisar hashes sin cambiar infraestructura:
   ./scripts/deploy-aws.sh --phase review \
+    --stack-name <AUTHORIZED_STACK_NAME> \
+    --blocked-stack-name <BLOCKED_STACK_NAME> \
     --profile <YOUR_AWS_PROFILE> --region <YOUR_AWS_REGION>
 
-Preparar el único target CREATE propuesto sin ejecutarlo:
+Preparar el target CREATE autorizado sin ejecutarlo:
   ./scripts/deploy-aws.sh --phase prepare \
+    --stack-name <AUTHORIZED_STACK_NAME> \
+    --blocked-stack-name <BLOCKED_STACK_NAME> \
     --profile <YOUR_AWS_PROFILE> --region <YOUR_AWS_REGION> \
     --confirm-commit-sha <APPROVED_COMMIT_SHA> \
     --confirm-identity-sha <APPROVED_IDENTITY_SHA256>
 
 Ejecutar únicamente el change set ya preparado y revalidado:
   ./scripts/deploy-aws.sh --phase execute \
+    --stack-name <AUTHORIZED_STACK_NAME> \
+    --blocked-stack-name <BLOCKED_STACK_NAME> \
     --profile <YOUR_AWS_PROFILE> --region <YOUR_AWS_REGION> \
     --confirm-commit-sha <APPROVED_COMMIT_SHA> \
     --confirm-identity-sha <APPROVED_IDENTITY_SHA256>
 
 Opciones:
   --phase FASE                 review | prepare | execute
+  --stack-name NOMBRE          Target autorizado explícitamente
+  --blocked-stack-name NOMBRE  Intento bloqueado que nunca debe consultarse
   --profile PERFIL             Perfil temporal explícito
   --region REGION              Región explícita
   --confirm-commit-sha SHA     Commit aprobado y limpio
   --confirm-identity-sha SHA   Hash canónico aprobado de identidad/profile/región
   -h, --help                   Muestra esta ayuda
 
-El stack v2, entorno, price class, nombre del change set y client token son internos.
-El intento calculadora-varillas-pwa-public-prod permanece bloqueado e intacto.
-Si calculadora-varillas-pwa-public-prod-v2 ya existe, el resultado siempre es STOP:
+Los nombres de stack se exigen en runtime; entorno, price class, nombre del change set y client token son internos.
+El intento indicado con --blocked-stack-name permanece bloqueado e intacto.
+Si el target indicado ya existe, el resultado siempre es STOP:
 nunca update, cambio automático de nombre, eliminación ni limpieza.
 USAGE
 }
@@ -81,6 +89,8 @@ utc_now() {
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --phase) [[ $# -ge 2 ]] || fail 'Falta el valor de --phase.'; PHASE="$2"; shift 2 ;;
+    --stack-name) [[ $# -ge 2 ]] || fail 'Falta el valor de --stack-name.'; TARGET_STACK="$2"; shift 2 ;;
+    --blocked-stack-name) [[ $# -ge 2 ]] || fail 'Falta el valor de --blocked-stack-name.'; BLOCKED_STACK="$2"; shift 2 ;;
     --profile) [[ $# -ge 2 ]] || fail 'Falta el valor de --profile.'; PROFILE="$2"; shift 2 ;;
     --region) [[ $# -ge 2 ]] || fail 'Falta el valor de --region.'; REGION="$2"; shift 2 ;;
     --confirm-commit-sha) [[ $# -ge 2 ]] || fail 'Falta el valor de --confirm-commit-sha.'; CONFIRM_COMMIT_SHA="$2"; shift 2 ;;
@@ -90,12 +100,15 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+[[ "$TARGET_STACK" =~ ^[A-Za-z][A-Za-z0-9-]{0,127}$ ]] || fail 'Debes indicar un --stack-name explícito válido.'
+[[ "$BLOCKED_STACK" =~ ^[A-Za-z][A-Za-z0-9-]{0,127}$ ]] || fail 'Debes indicar un --blocked-stack-name explícito válido.'
 [[ "$TARGET_STACK" != "$BLOCKED_STACK" ]] || fail 'El target propuesto coincide con el intento bloqueado; STOP.'
-[[ "$TARGET_STACK" == 'calculadora-varillas-pwa-public-prod-v2' ]] || fail 'El único target permitido es v2.'
-[[ "$BLOCKED_STACK" == 'calculadora-varillas-pwa-public-prod' ]] || fail 'Cambió la denegación del intento bloqueado; STOP.'
 [[ "$PHASE" =~ ^(review|prepare|execute)$ ]] || fail '--phase debe ser review, prepare o execute.'
 [[ "$PROFILE" =~ ^[A-Za-z0-9_+=,.@-]{1,128}$ ]] || fail 'Debes indicar un --profile explícito válido.'
 [[ "$REGION" =~ ^[a-z]{2}(-gov)?-[a-z]+-[0-9]+$ ]] || fail 'La región no tiene un formato válido.'
+
+export AWS_STACK_NAME="$TARGET_STACK"
+export AWS_BLOCKED_STACK_NAME="$BLOCKED_STACK"
 
 for tool in aws node curl git jq shasum cmp; do
   command -v "$tool" >/dev/null 2>&1 || fail "No se encontró $tool en PATH."
@@ -396,7 +409,7 @@ if [[ "$PHASE" == 'prepare' ]]; then
   node "$VALIDATOR" check-absence \
     --attempt-dir "$ATTEMPT_DIR" --prefix preflight-describe-stacks --operation DescribeStacks \
     --attempt "$ATTEMPT_DIR/attempt.json" --identity "$ATTEMPT_DIR/identity.json" >/dev/null || \
-    fail 'El target v2 existe, su ausencia es ambigua o falta el request ID exacto; STOP sin update ni nombre alternativo.'
+    fail 'El target autorizado existe, su ausencia es ambigua o falta el request ID exacto; STOP sin update ni nombre alternativo.'
 
   capture_command preflight-list-change-sets "${AWS[@]}" cloudformation list-change-sets \
     --stack-name "$TARGET_STACK" --output json
@@ -413,7 +426,7 @@ if [[ "$PHASE" == 'prepare' ]]; then
   CLIENT_TOKEN="$(jq -er '.clientToken' "$ATTEMPT_DIR/attempt.json")"
   DEPLOYMENT_ID="$(jq -er '.parameters[] | select(.ParameterKey == "DeploymentId") | .ParameterValue' "$ATTEMPT_DIR/create-request.json")"
 
-  info 'Creando un change set CREATE trazable para el target v2 sin ejecutarlo'
+  info 'Creando un change set CREATE trazable para el target autorizado sin ejecutarlo'
   capture_command create-change-set "${AWS[@]}" cloudformation create-change-set \
     --stack-name "$TARGET_STACK" \
     --change-set-name "$CHANGE_SET_NAME" \
@@ -474,7 +487,7 @@ if [[ "$PHASE" == 'prepare' ]]; then
   node "$VALIDATOR" check-permissions --attempt-dir "$ATTEMPT_DIR"
   [[ "$(file_mode "$CHANGE_STATE")" == '600' ]] || fail 'El puntero privado debe tener modo 0600.'
 
-  printf 'Change set CREATE v2 preparado y validado; no fue ejecutado.\n'
+  printf 'Change set CREATE preparado y validado; no fue ejecutado.\n'
   printf 'Evidencia privada write-once preservada; el reporte compartible contiene solo hashes y booleanos.\n'
   exit 0
 fi
@@ -544,7 +557,7 @@ node "$VALIDATOR" seal \
   --attempt-dir "$ATTEMPT_DIR" --output-name chain-execute-reviewed.json \
   --previous "$ATTEMPT_DIR/chain-input-execute.json"
 
-info 'Ejecutando exactamente el change set CREATE v2 validado'
+info 'Ejecutando exactamente el change set CREATE validado'
 INITIAL_GUARD_AT="$(utc_now)"
 node "$VALIDATOR" guard-execute \
   --phase execute \
