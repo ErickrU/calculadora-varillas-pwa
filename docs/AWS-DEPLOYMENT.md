@@ -1,227 +1,104 @@
-# Despliegue seguro en AWS
+# Despliegue AWS seguro
 
-Esta guía permite publicar una instancia propia de la PWA con **Amazon S3 privado + Amazon CloudFront + Origin Access Control (OAC)**. No usa el endpoint público de sitio web de S3.
+Esta alternativa crea una instancia nueva de Calculadora de Varillas con S3 privado y CloudFront OAC. El repositorio no contiene ni afirma un despliegue activo.
 
-> **Sin estado real versionado:** este repositorio no contiene ni afirma un despliegue activo. Usa marcadores `<YOUR_...>` y guarda los outputs únicamente en `.aws-deployment.json`, archivo local ignorado por Git.
+> S3, CloudFront, solicitudes, transferencia, versiones e invalidaciones pueden generar costos. Usa credenciales temporales de mínimo privilegio. Si no puedes determinar si la cuenta es de producción, trátala como producción y detente antes de escribir.
 
-> **Costos:** S3, CloudFront, transferencia, solicitudes e invalidaciones pueden generar cargos. La plantilla usa `PriceClass_100`, pero no garantiza costo cero. Revisa AWS Pricing y configura un presupuesto antes de mantener un entorno.
+## Controles principales
 
-## Arquitectura
+- S3: cuatro Block Public Access, `BucketOwnerEnforced`, SSE-S3 y versionado.
+- Origen: endpoint REST privado; no website endpoint, CORS ni ACL pública.
+- CloudFront: OAC SigV4 `always`, HTTP→HTTPS y solo `GET`/`HEAD`.
+- Política S3: lectura exclusiva desde la distribución creada mediante `AWS:SourceArn` y denegación de transporte inseguro.
+- Respuestas: CSP estricta, `DENY`, `nosniff`, HSTS, Referrer Policy y Permissions Policy; sin `X-XSS-Protection`.
+- Operación: creación única con `prepare`/`execute`, stack policy inmutable y termination protection para `prod` antes de publicar objetos.
 
-```mermaid
-flowchart LR
-  Browser[Navegador / PWA] -->|HTTPS| CF[CloudFront]
-  CF -->|OAC · SigV4| S3[(S3 privado)]
-  CF --> Headers[Cabeceras de seguridad]
-  Deploy[deploy-aws.sh] --> CF
-  Deploy --> S3
-```
+La plantilla no crea IAM, DNS, certificados, WAF, logs, funciones ni nombres físicos.
 
-CloudFront sirve la URL pública y redirige HTTP a HTTPS. S3 mantiene activos los cuatro controles de Block Public Access y su política solo concede `s3:GetObject` al servicio CloudFront cuando la solicitud proviene de la distribución creada.
+## Requisitos
 
-## Recursos creados
+- AWS CLI v2, Node.js 20+, `jq`, `curl` y `shasum`;
+- un perfil SSO/rol temporal de mínimo privilegio o la cadena estándar de credenciales;
+- permisos para validar/crear la plantilla, aplicar protecciones, cargar la allowlist y crear una invalidación.
 
-| Recurso | Propósito | Protección/costo relevante |
-|---|---|---|
-| Bucket S3 | Archivos estáticos | Privado, SSE-S3, versionado, `DeletionPolicy: Retain` |
-| Bucket policy | Lectura del origen | Solo CloudFront OAC y denegación de transporte no seguro |
-| CloudFront OAC | Firma SigV4 hacia S3 | Sustituye OAI para un despliegue nuevo |
-| CloudFront distribution | CDN y HTTPS | `PriceClass_100`, HTTP/2 y HTTP/3; certificado predeterminado administrado por AWS |
-| Response headers policy | CSP, HSTS y otras cabeceras | Bloquea recursos que no pertenecen al mismo origen |
+No guardes credenciales, cuentas, ARN ni outputs en Git. Los estados locales `.aws-change-set.json` y `.aws-deployment.json` están ignorados y el script los crea con modo `0600`.
 
-No crea usuarios, claves de acceso, roles IAM, certificados, zonas DNS, WAF ni buckets de logs.
-
-## Credenciales y permisos
-
-Requisitos:
-
-- AWS CLI v2;
-- una cuenta y región elegidas explícitamente;
-- un rol o perfil de **mínimo privilegio** capaz de administrar esta plantilla y subir sus objetos;
-- permiso para generar una invalidación de CloudFront.
-
-Prefiere credenciales temporales mediante AWS IAM Identity Center (SSO), un rol asumido o la cadena estándar del entorno. Evita credenciales administrativas para el uso habitual y nunca guardes claves, tokens, perfiles, cuentas, ARN, outputs ni estado local en Git.
-
-Con perfil normal o SSO:
-
-```bash
-aws sso login --profile <YOUR_AWS_PROFILE>
-aws sts get-caller-identity --profile <YOUR_AWS_PROFILE>
-```
-
-Sin `--profile`, AWS CLI delega en su cadena estándar de credenciales:
-
-```bash
-aws sts get-caller-identity
-```
-
-Antes de aplicar, revisa que la cuenta y el principal devueltos sean los previstos. Si no puedes determinar si una cuenta o recurso es de producción, trátalo como producción y detente antes de modificarlo.
-
-## 1. Revisar sin modificar AWS
-
-Desde la raíz del repositorio, ejecuta el modo de revisión sin `--apply`:
+## 1. Revisar sin escribir
 
 ```bash
 ./scripts/deploy-aws.sh \
+  --phase review \
   --profile <YOUR_AWS_PROFILE> \
   --region <YOUR_AWS_REGION> \
-  --stack <YOUR_STACK_NAME> \
-  --environment <YOUR_ENVIRONMENT>
+  --stack <YOUR_NEW_STACK_NAME> \
+  --environment prod
 ```
 
-`--profile <YOUR_AWS_PROFILE>` es opcional y admite perfiles normales o SSO. Si se omite, se usa la cadena estándar. La región, el stack y el entorno siempre son obligatorios.
+`--profile` es opcional. La fase valida archivos, sintaxis, identidad, plantilla y que el nombre de stack no exista. Solo muestra el SHA-256; no imprime cuenta, ARN ni identificadores físicos. Comprueba la identidad activa por un canal local seguro y no continúes si tiene permisos más amplios de lo necesario.
 
-El modo de revisión valida herramientas, archivos locales, identidad, plantilla y propiedad de un stack existente. Solo ejecuta lecturas de AWS; no crea change sets ni modifica recursos. Muestra localmente la cuenta, región, `DeploymentId`, `StackId` si existe y SHA-256 de la plantilla.
-
-El modo de escritura exige `--confirm-account <YOUR_AWS_ACCOUNT_ID>` y `--confirm-template-sha <YOUR_TEMPLATE_SHA256>`. Al actualizar también exige `--confirm-stack-id <YOUR_STACK_ARN>`.
-
-## 2. Desplegar tras una revisión aprobada
-
-Después de revisar identidad, cuenta, región, permisos, costos y hash:
+## 2. Preparar un change set CREATE
 
 ```bash
 ./scripts/deploy-aws.sh \
+  --phase prepare \
   --profile <YOUR_AWS_PROFILE> \
   --region <YOUR_AWS_REGION> \
-  --stack <YOUR_STACK_NAME> \
-  --environment <YOUR_ENVIRONMENT> \
+  --stack <YOUR_NEW_STACK_NAME> \
+  --environment prod \
   --confirm-account <YOUR_AWS_ACCOUNT_ID> \
-  --confirm-template-sha <YOUR_TEMPLATE_SHA256> \
-  --apply
+  --confirm-template-sha <YOUR_TEMPLATE_SHA256>
 ```
 
-Para actualizar un stack existente, agrega:
+La fase vuelve a verificar todo, exige que el stack no exista y crea un change set `CREATE` sin ejecutarlo. Rechaza cualquier conjunto que no agregue exactamente los cinco recursos esperados o indique reemplazo. Su referencia queda solo en `.aws-change-set.json` con modo `0600`.
+
+## 3. Ejecutar el change set preparado
+
+Revisa el cambio fuera del repositorio. Si es correcto, repite los mismos argumentos con `execute`:
 
 ```bash
---confirm-stack-id <YOUR_STACK_ARN>
-```
-
-El script:
-
-1. vuelve a verificar identidad, cuenta, región y SHA;
-2. comprueba marcador, repositorio, proyecto, entorno y `DeploymentId` de cualquier stack existente;
-3. crea un change set sin ejecutarlo y muestra cada cambio;
-4. rechaza eliminaciones o reemplazos de infraestructura;
-5. ejecuta únicamente el change set revisado;
-6. aplica una stack policy que impide reemplazar o eliminar el bucket y la distribución durante actualizaciones;
-7. activa protección de terminación cuando el entorno elegido es `prod`;
-8. obtiene bucket y distribución desde outputs verificados;
-9. rechaza enlaces simbólicos y objetos S3 ajenos a la allowlist;
-10. publica recursos primero y el service worker/HTML al final, sin `sync --delete`;
-11. invalida `/*`, espera la finalización y ejecuta el smoke test HTTPS;
-12. escribe `.aws-deployment.json` con permisos restrictivos para uso local.
-
-La creación inicial de CloudFront puede tardar varios minutos. No desactives protección de terminación u otras salvaguardas en un entorno activo sin aprobación explícita.
-
-## 3. Verificar
-
-La URL se obtiene localmente con:
-
-```bash
-aws cloudformation describe-stacks \
-  --stack-name <YOUR_STACK_NAME> \
-  --query "Stacks[0].Outputs[?OutputKey=='SiteUrl'].OutputValue" \
-  --output text \
-  --profile <YOUR_AWS_PROFILE> \
-  --region <YOUR_AWS_REGION>
-```
-
-El perfil es opcional. Pruebas recomendadas:
-
-```bash
-curl -I "<YOUR_CLOUDFRONT_URL>/"
-curl -I "<YOUR_CLOUDFRONT_URL>/sw.js"
-curl -I "<YOUR_CLOUDFRONT_URL>/manifest.webmanifest"
-```
-
-Comprueba además:
-
-- el bucket rechaza acceso público directo;
-- la calculadora devuelve 8 barras para 30 × 50 cm, 1 % y 5/8";
-- DevTools → Application muestra manifest y service worker activos;
-- una segunda carga funciona en modo offline;
-- no hay errores en la consola;
-- Network muestra CSP, HSTS y `X-Content-Type-Options`.
-
-No copies los outputs en archivos versionados. `.aws-deployment.json`, `deployment-outputs.json` e `infra/packaged.yaml` están ignorados.
-
-## Actualizar la aplicación
-
-1. Cambia el código.
-2. Si modificaste el app shell, incrementa `VERSION` en `sw.js`.
-3. Valida localmente.
-4. Repite el modo de revisión y confirma los valores exactos mostrados en tu terminal.
-5. Aplica solo después de revisar el change set y su impacto.
-
-CloudFormation no recrea recursos si la plantilla no cambió; el script actualiza objetos y realiza la invalidación. La PWA avisará cuando el navegador instale un worker nuevo.
-
-## Rollback
-
-- **Infraestructura:** CloudFormation revierte una actualización fallida automáticamente.
-- **Contenido:** el bucket tiene versionado. Identifica el `VersionId` apropiado en tu cuenta y restaura esa versión; luego invalida CloudFront.
-- **PWA:** restaura `sw.js`, incrementa de nuevo `VERSION` y publica. No reutilices una versión de caché ya distribuida.
-
-Inspección de solo lectura:
-
-```bash
-aws s3api list-object-versions \
-  --bucket <YOUR_PRIVATE_BUCKET_NAME> \
-  --prefix sw.js \
-  --profile <YOUR_AWS_PROFILE>
-```
-
-## Eliminación segura
-
-Eliminar un stack interrumpe el sitio. El bucket usa `DeletionPolicy: Retain`, por lo que eliminar el stack **no elimina sus objetos**. Los entornos `prod` pueden tener protección de terminación. `destroy-aws.sh` comprueba marcador, tags, tipos, `StackId`, entorno y cuenta; nunca desactiva esa protección ni purga datos.
-
-Primero revisa sin modificar:
-
-```bash
-./scripts/destroy-aws.sh \
+./scripts/deploy-aws.sh \
+  --phase execute \
   --profile <YOUR_AWS_PROFILE> \
   --region <YOUR_AWS_REGION> \
-  --stack <YOUR_STACK_NAME>
+  --stack <YOUR_NEW_STACK_NAME> \
+  --environment prod \
+  --confirm-account <YOUR_AWS_ACCOUNT_ID> \
+  --confirm-template-sha <YOUR_TEMPLATE_SHA256>
 ```
 
-El perfil es opcional. Si la protección está activa, la eliminación se detiene. Desactivarla es una decisión separada, potencialmente destructiva, que requiere aprobación explícita y no está automatizada aquí.
+La fase `execute`:
 
-Procedimiento general:
+1. valida modo y contenido del estado local;
+2. comprueba que el mismo change set sigue disponible y es exclusivamente `CREATE`;
+3. confirma que el stack está en revisión y no tiene recursos previos;
+4. ejecuta una sola vez y espera `CREATE_COMPLETE`;
+5. confirma identidad, cinco recursos y bucket vacío;
+6. aplica/verifica la stack policy y, en `prod`, ejecuta `cloudformation update-termination-protection --enable-termination-protection` y verifica el resultado;
+7. valida privacidad S3, cifrado, versionado, OAC, métodos, HTTPS y cabeceras antes de cargar contenido;
+8. exige `403` al acceso S3 anónimo directo;
+9. carga únicamente los 13 archivos públicos, recursos primero e HTML/service worker al final;
+10. invalida solo la distribución creada, verifica el sitio anónimamente, repite el `403` directo y guarda estado local `0600`.
 
-1. Confirma que la URL no tenga usuarios ni dependencias.
-2. Conserva los outputs y una copia de las versiones necesarias fuera de Git.
-3. Revisa la identidad, el StackId inmutable y el entorno.
-4. Elimina explícitamente el stack solo tras recibir aprobación.
-5. Verifica qué bucket quedó retenido.
-6. Elimina versiones y bucket únicamente con una aprobación separada para pérdida de datos.
+No ejecutes aquí el comando de termination protection de forma aislada: forma parte del gate de `execute` para una creación aprobada. No existe ruta de actualización, destrucción o limpieza. Cualquier operación futura sobre infraestructura desplegada requiere revisión y autorización separadas; nunca desactives protecciones de producción para sortear este límite.
 
-La limpieza de versiones es irreversible y se deja deliberadamente fuera de los scripts.
+## Verificación independiente
 
-## Dominio personalizado (opcional)
+```bash
+./scripts/verify-site.sh <YOUR_CLOUDFRONT_HTTPS_URL>
+```
 
-Para `<YOUR_CUSTOM_DOMAIN>` se necesita:
+Comprueba redirección HTTPS, respuesta 200, cabeceras, ausencia de `X-XSS-Protection`, manifest, service worker, CSS, JavaScript, iconos, cinco controles y un solo Compartir. Prueba además instalación, segunda carga offline, vista móvil, teclado, Web Share y los dos fallbacks de portapapeles.
 
-1. certificado ACM en `us-east-1`;
-2. alias en la distribución;
-3. registro DNS hacia CloudFront;
-4. actualización de `id`, `start_url` y, si cambia la ruta base, `scope` del manifest.
+El caso funcional de referencia debe seguir produciendo 8 barras, `As = 15 cm²` requerido y `16 cm²` colocado para `30 × 50 cm`, `1 %` y `5/8"`.
 
-No agregues el dominio hasta tener control de DNS y un proceso de renovación/validación del certificado.
+## Retención y recuperación
 
-## Observabilidad y presupuesto
-
-Este despliegue académico no activa logs de acceso por defecto. Antes de un uso operativo, decide explícitamente:
-
-- destino privado de CloudFront standard logging;
-- retención, cifrado y acceso a logs;
-- alarma o presupuesto de costos;
-- AWS Config, CloudTrail y GuardDuty según las políticas de la cuenta;
-- responsable y periodo de revisión.
+`RetainExceptOnCreate` permite que CloudFormation elimine el bucket si falla la creación inicial, pero lo retiene una vez creada correctamente la stack. `UpdateReplacePolicy: Retain`, versionado, stack policy y termination protection agregan barreras contra pérdida accidental. El almacenamiento retenido y sus versiones pueden seguir generando cargos. Este repositorio no automatiza eliminación ni desactivación de protecciones.
 
 ## Fuentes
 
-- [AWS: restringir acceso a un origen S3 con CloudFront OAC](https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/private-content-restricting-access-to-s3.html)
-- [AWS: comenzar con un sitio estático seguro y CloudFormation](https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/getting-started-secure-static-website-cloudformation-template.html)
-- [AWS: requerir HTTPS entre viewers y CloudFront](https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/using-https-viewers-to-cloudfront.html)
-- [AWS CloudFormation: configuración de certificado de viewer](https://docs.aws.amazon.com/AWSCloudFormation/latest/TemplateReference/aws-properties-cloudfront-distribution-viewercertificate.html)
+- [AWS: restringir un origen S3 mediante OAC](https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/private-content-restricting-access-to-s3.html)
+- [AWS: requerir HTTPS entre clientes y CloudFront](https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/using-https-viewers-to-cloudfront.html)
+- [AWS: políticas de cabeceras de respuesta](https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/understanding-response-headers-policies.html)
 
-Content was rephrased for compliance with licensing restrictions.
+Contenido reformulado para cumplir restricciones de licencia.

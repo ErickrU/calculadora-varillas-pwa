@@ -9,19 +9,32 @@ npm-debug.log*
 *.log
 .cache/
 coverage/
+_site/
 
-# Variables, credenciales y estado local
-.env
-.env.*
-!.env.example
+# Configuración local y secretos
+.env*
+*.credentials
+credentials
+credentials.*
+.aws/
 *.pem
 *.key
-.agents/
+*.p8
+*.p12
+*.pfx
+*.jks
+*.keystore
 
-# Salidas locales del despliegue
+# Estado y salidas locales de AWS
+.aws-change-set.json
 .aws-deployment.json
-deployment-outputs.json
-infra/packaged.yaml
+deployment-outputs*.json
+aws-outputs*.json
+cdk-outputs*.json
+infra/packaged*.yaml
+
+# Metadatos de agentes locales
+.agents/
 
 # Archivos temporales
 .tmp/

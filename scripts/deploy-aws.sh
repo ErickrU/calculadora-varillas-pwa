@@ -1,103 +1,110 @@
 #!/usr/bin/env bash
-# Revisa o despliega la PWA mediante CloudFormation + S3 + CloudFront.
-# Seguro por defecto: sin --apply solo lee y valida; no crea change sets.
+# Crea una instancia nueva de Calculadora de Varillas con CloudFormation, S3 y CloudFront.
+# En producción, la fase execute activa y verifica termination protection antes de publicar.
 set -euo pipefail
 umask 077
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TEMPLATE="$ROOT/infra/cloudformation.yaml"
 STACK_POLICY="$ROOT/infra/stack-policy.json"
+CHANGE_STATE="$ROOT/.aws-change-set.json"
+DEPLOYMENT_STATE="$ROOT/.aws-deployment.json"
 MARKER='calculadora-varillas-pwa-cloudfront-oac-v1'
 PROJECT='calculadora-varillas-pwa'
 REPOSITORY='ErickrU-calculadora-varillas-pwa'
 
-PROFILE=""
-REGION=""
-STACK=""
-ENVIRONMENT=""
-PRICE_CLASS="PriceClass_100"
-CONFIRM_ACCOUNT=""
-CONFIRM_TEMPLATE_SHA=""
-CONFIRM_STACK_ID=""
-APPLY=false
+PHASE=''
+PROFILE=''
+REGION=''
+STACK=''
+ENVIRONMENT=''
+PRICE_CLASS='PriceClass_100'
+CONFIRM_ACCOUNT=''
+CONFIRM_TEMPLATE_SHA=''
+TEMPLATE_SHA=''
+ACCOUNT_ID=''
+DEPLOYMENT_ID=''
 
 usage() {
   cat <<'USAGE'
-Uso (revisión; no modifica AWS):
-  ./scripts/deploy-aws.sh [--profile <YOUR_AWS_PROFILE>] \
-    --region <YOUR_AWS_REGION> --stack <YOUR_STACK_NAME> \
+Uso de solo lectura:
+  ./scripts/deploy-aws.sh --phase review [--profile <YOUR_AWS_PROFILE>] \
+    --region <YOUR_AWS_REGION> --stack <YOUR_NEW_STACK_NAME> \
     --environment dev|test|stage|prod
 
-Despliegue después de revisar el plan:
-  ./scripts/deploy-aws.sh [--profile <YOUR_AWS_PROFILE>] \
-    --region <YOUR_AWS_REGION> --stack <YOUR_STACK_NAME> \
-    --environment <YOUR_ENVIRONMENT> \
+Preparar un change set CREATE sin ejecutarlo:
+  ./scripts/deploy-aws.sh --phase prepare [--profile <YOUR_AWS_PROFILE>] \
+    --region <YOUR_AWS_REGION> --stack <YOUR_NEW_STACK_NAME> \
+    --environment dev|test|stage|prod \
     --confirm-account <YOUR_AWS_ACCOUNT_ID> \
-    --confirm-template-sha <YOUR_TEMPLATE_SHA256> --apply
+    --confirm-template-sha <YOUR_TEMPLATE_SHA256>
 
-Al actualizar un stack existente también se exige:
-  --confirm-stack-id <YOUR_STACK_ARN>
-
-Credenciales:
-  --profile es opcional y admite perfiles normales o SSO. Si se omite,
-  AWS CLI usa la cadena estándar de credenciales. Prefiere credenciales
-  temporales de mínimo privilegio y revisa la identidad antes de aplicar.
+Ejecutar únicamente el change set CREATE ya preparado:
+  ./scripts/deploy-aws.sh --phase execute [--profile <YOUR_AWS_PROFILE>] \
+    --region <YOUR_AWS_REGION> --stack <YOUR_NEW_STACK_NAME> \
+    --environment dev|test|stage|prod \
+    --confirm-account <YOUR_AWS_ACCOUNT_ID> \
+    --confirm-template-sha <YOUR_TEMPLATE_SHA256>
 
 Opciones:
-  --profile PERFIL           Perfil normal o SSO de AWS CLI (opcional)
-  --region REGION            Región del stack/bucket (obligatorio)
-  --stack NOMBRE             Nombre del stack (obligatorio)
-  --environment ENTORNO      dev|test|stage|prod (obligatorio, sin predeterminado)
+  --phase FASE               review | prepare | execute
+  --profile PERFIL           Perfil normal o SSO (opcional)
+  --region REGION            Región explícita del stack y bucket
+  --stack NOMBRE             Nombre nuevo del stack
+  --environment ENTORNO      dev | test | stage | prod
   --price-class CLASE        PriceClass_100 (pred.) | PriceClass_200 | PriceClass_All
-  --confirm-account ID       ID de 12 dígitos; obligatorio con --apply
-  --confirm-template-sha SHA SHA-256 mostrado por la revisión; obligatorio con --apply
-  --confirm-stack-id ARN     StackId inmutable; obligatorio al actualizar
-  --apply                    Crea un change set, lo revisa y despliega si es seguro
+  --confirm-account ID       Confirmación fuera de banda de la cuenta activa
+  --confirm-template-sha SHA Confirmación del SHA-256 mostrado por review
   -h, --help                 Muestra esta ayuda
+
+Las fases de escritura son deliberadamente separadas. No se admiten cambios sobre
+un stack existente. En prod, execute activa termination protection antes de subir
+contenido. Usa credenciales temporales de mínimo privilegio.
 USAGE
 }
 
-fail() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
-info() { printf '\n==> %s\n' "$*"; }
+fail() {
+  printf 'ERROR: %s\n' "$*" >&2
+  exit 1
+}
+
+info() {
+  printf '\n==> %s\n' "$*"
+}
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --profile) [[ $# -ge 2 ]] || fail 'Falta el valor de --profile'; PROFILE="$2"; shift 2 ;;
-    --region) [[ $# -ge 2 ]] || fail 'Falta el valor de --region'; REGION="$2"; shift 2 ;;
-    --stack) [[ $# -ge 2 ]] || fail 'Falta el valor de --stack'; STACK="$2"; shift 2 ;;
-    --environment) [[ $# -ge 2 ]] || fail 'Falta el valor de --environment'; ENVIRONMENT="$2"; shift 2 ;;
-    --price-class) [[ $# -ge 2 ]] || fail 'Falta el valor de --price-class'; PRICE_CLASS="$2"; shift 2 ;;
-    --confirm-account) [[ $# -ge 2 ]] || fail 'Falta el valor de --confirm-account'; CONFIRM_ACCOUNT="$2"; shift 2 ;;
-    --confirm-template-sha) [[ $# -ge 2 ]] || fail 'Falta el valor de --confirm-template-sha'; CONFIRM_TEMPLATE_SHA="$2"; shift 2 ;;
-    --confirm-stack-id) [[ $# -ge 2 ]] || fail 'Falta el valor de --confirm-stack-id'; CONFIRM_STACK_ID="$2"; shift 2 ;;
-    --apply) APPLY=true; shift ;;
+    --phase) [[ $# -ge 2 ]] || fail 'Falta el valor de --phase.'; PHASE="$2"; shift 2 ;;
+    --profile) [[ $# -ge 2 ]] || fail 'Falta el valor de --profile.'; PROFILE="$2"; shift 2 ;;
+    --region) [[ $# -ge 2 ]] || fail 'Falta el valor de --region.'; REGION="$2"; shift 2 ;;
+    --stack) [[ $# -ge 2 ]] || fail 'Falta el valor de --stack.'; STACK="$2"; shift 2 ;;
+    --environment) [[ $# -ge 2 ]] || fail 'Falta el valor de --environment.'; ENVIRONMENT="$2"; shift 2 ;;
+    --price-class) [[ $# -ge 2 ]] || fail 'Falta el valor de --price-class.'; PRICE_CLASS="$2"; shift 2 ;;
+    --confirm-account) [[ $# -ge 2 ]] || fail 'Falta el valor de --confirm-account.'; CONFIRM_ACCOUNT="$2"; shift 2 ;;
+    --confirm-template-sha) [[ $# -ge 2 ]] || fail 'Falta el valor de --confirm-template-sha.'; CONFIRM_TEMPLATE_SHA="$2"; shift 2 ;;
     -h|--help) usage; exit 0 ;;
     *) fail "Argumento desconocido: $1" ;;
   esac
 done
 
+[[ "$PHASE" =~ ^(review|prepare|execute)$ ]] || fail '--phase debe ser review, prepare o execute.'
 [[ -n "$REGION" ]] || fail 'Debes indicar --region.'
 [[ -n "$STACK" ]] || fail 'Debes indicar --stack.'
-[[ -n "$ENVIRONMENT" ]] || fail 'Debes indicar --environment de forma explícita.'
-[[ "$STACK" =~ ^[a-zA-Z][a-zA-Z0-9-]{0,99}$ ]] || fail 'El stack debe comenzar con letra y usar hasta 100 letras, números o guiones.'
-[[ "$ENVIRONMENT" =~ ^(dev|test|stage|prod)$ ]] || fail '--environment debe ser dev, test, stage o prod.'
-[[ "$PRICE_CLASS" =~ ^(PriceClass_100|PriceClass_200|PriceClass_All)$ ]] || fail '--price-class no es válido.'
+[[ -n "$ENVIRONMENT" ]] || fail 'Debes indicar --environment.'
+[[ "$REGION" =~ ^[a-z]{2}(-gov)?-[a-z]+-[0-9]+$ ]] || fail 'La región no tiene un formato válido.'
+[[ "$STACK" =~ ^[a-zA-Z][a-zA-Z0-9-]{0,99}$ ]] || fail 'El nombre del stack no es válido.'
+[[ "$ENVIRONMENT" =~ ^(dev|test|stage|prod)$ ]] || fail 'El entorno no es válido.'
+[[ "$PRICE_CLASS" =~ ^(PriceClass_100|PriceClass_200|PriceClass_All)$ ]] || fail 'La clase de precio no es válida.'
 
-for tool in aws node curl shasum; do command -v "$tool" >/dev/null 2>&1 || fail "No se encontró $tool en PATH."; done
-[[ -f "$TEMPLATE" ]] || fail "No existe $TEMPLATE"
-[[ -f "$STACK_POLICY" ]] || fail "No existe $STACK_POLICY"
-[[ -f "$ROOT/scripts/verify-site.sh" ]] || fail 'Falta scripts/verify-site.sh.'
-[[ -x "$ROOT/scripts/verify-site.sh" ]] || fail 'scripts/verify-site.sh no es ejecutable.'
-bash -n "$ROOT/scripts/verify-site.sh"
+for tool in aws node curl jq shasum; do
+  command -v "$tool" >/dev/null 2>&1 || fail "No se encontró $tool en PATH."
+done
 
 AWS=(aws --region "$REGION" --no-cli-pager)
-CREDENTIAL_SOURCE='cadena estándar de credenciales de AWS'
 if [[ -n "$PROFILE" ]]; then
   AWS=(aws --profile "$PROFILE" --region "$REGION" --no-cli-pager)
-  CREDENTIAL_SOURCE="perfil $PROFILE"
 fi
 
-info 'Validando la allowlist local'
 PUBLIC_FILES=(
   index.html
   offline.html
@@ -113,194 +120,413 @@ PUBLIC_FILES=(
   iconos/icono-maskable-512.png
   iconos/apple-touch-icon.png
 )
-for relative in "${PUBLIC_FILES[@]}"; do
-  [[ -f "$ROOT/$relative" ]] || fail "Falta el archivo publicable: $relative"
-  [[ ! -L "$ROOT/$relative" ]] || fail "No se permiten enlaces simbólicos en la publicación: $relative"
-done
-for script in "$ROOT"/js/*.js "$ROOT/sw.js" "$ROOT/herramientas/servidor.mjs"; do node --check "$script" >/dev/null; done
-node -e "JSON.parse(require('fs').readFileSync(process.argv[1], 'utf8'))" "$ROOT/manifest.webmanifest"
-read -r TEMPLATE_SHA _ < <(shasum -a 256 "$TEMPLATE")
-[[ "$TEMPLATE_SHA" =~ ^[a-f0-9]{64}$ ]] || fail 'No se pudo calcular SHA-256 de la plantilla.'
-printf 'Archivos, scripts y manifest: OK\n'
+[[ "${#PUBLIC_FILES[@]}" == '13' ]] || fail 'La allowlist debe contener exactamente 13 archivos.'
 
-info 'Verificando identidad AWS (solo lectura)'
-ACCOUNT_ID="$("${AWS[@]}" sts get-caller-identity --query Account --output text)"
-CALLER_ARN="$("${AWS[@]}" sts get-caller-identity --query Arn --output text)"
-[[ "$ACCOUNT_ID" =~ ^[0-9]{12}$ ]] || fail 'AWS devolvió un ID de cuenta inesperado.'
-read -r DEPLOYMENT_ID _ < <(printf '%s' "$ACCOUNT_ID:$REGION:$STACK" | shasum -a 256)
-DEPLOYMENT_ID="${DEPLOYMENT_ID:0:10}"
-printf 'Credenciales: %s\nRegión: %s\nCuenta: %s\nPrincipal: %s\n' \
-  "$CREDENTIAL_SOURCE" "$REGION" "$ACCOUNT_ID" "$CALLER_ARN"
+validate_local() {
+  [[ -f "$TEMPLATE" ]] || fail 'Falta la plantilla CloudFormation.'
+  [[ -f "$STACK_POLICY" ]] || fail 'Falta la stack policy.'
+  [[ -x "$ROOT/scripts/verify-site.sh" ]] || fail 'verify-site.sh debe ser ejecutable.'
 
-info 'Validando CloudFormation (solo lectura)'
-"${AWS[@]}" cloudformation validate-template --template-body "file://$TEMPLATE" >/dev/null
-printf 'Plantilla: válida\n'
+  local relative
+  for relative in "${PUBLIC_FILES[@]}"; do
+    [[ -f "$ROOT/$relative" ]] || fail "Falta un archivo publicable: $relative"
+    [[ ! -L "$ROOT/$relative" ]] || fail "No se publican enlaces simbólicos: $relative"
+  done
 
-STACK_EXISTS=false
-STACK_ID=''
-STACK_ERROR="$(mktemp)"
-trap 'rm -f "$STACK_ERROR"' EXIT
-if STACK_ID="$("${AWS[@]}" cloudformation describe-stacks --stack-name "$STACK" --query 'Stacks[0].StackId' --output text 2>"$STACK_ERROR")"; then
-  STACK_EXISTS=true
-else
-  MESSAGE="$(<"$STACK_ERROR")"
-  if [[ "$MESSAGE" != *'does not exist'* ]]; then fail "No se pudo inspeccionar el stack: $MESSAGE"; fi
-fi
+  local script
+  for script in "$ROOT"/js/*.js "$ROOT/sw.js" "$ROOT/herramientas/servidor.mjs"; do
+    node --check "$script" >/dev/null
+  done
+  node -e "JSON.parse(require('node:fs').readFileSync(process.argv[1], 'utf8'))" \
+    "$ROOT/manifest.webmanifest"
+  bash -n "$ROOT/scripts/verify-site.sh"
 
-if [[ "$STACK_EXISTS" == true ]]; then
-  info 'Verificando propiedad del stack existente (solo lectura)'
-  stack_value() { "${AWS[@]}" cloudformation describe-stacks --stack-name "$STACK_ID" --query "$1" --output text; }
-  EXISTING_PROJECT="$(stack_value "Stacks[0].Tags[?Key=='Project'].Value | [0]")"
-  EXISTING_REPOSITORY="$(stack_value "Stacks[0].Tags[?Key=='Repository'].Value | [0]")"
-  EXISTING_MANAGED_BY="$(stack_value "Stacks[0].Tags[?Key=='ManagedBy'].Value | [0]")"
-  EXISTING_ENVIRONMENT="$(stack_value "Stacks[0].Parameters[?ParameterKey=='Environment'].ParameterValue | [0]")"
-  EXISTING_DEPLOYMENT_ID="$(stack_value "Stacks[0].Parameters[?ParameterKey=='DeploymentId'].ParameterValue | [0]")"
-  EXISTING_MARKER="$(stack_value "Stacks[0].Outputs[?OutputKey=='DeploymentMarker'].OutputValue | [0]")"
-  [[ "$EXISTING_PROJECT" == "$PROJECT" ]] || fail "El stack existente no pertenece al proyecto esperado (Project=$EXISTING_PROJECT)."
-  [[ "$EXISTING_REPOSITORY" == "$REPOSITORY" ]] || fail "El stack existente no pertenece al repositorio esperado (Repository=$EXISTING_REPOSITORY)."
-  [[ "$EXISTING_MANAGED_BY" == 'CloudFormation' ]] || fail "ManagedBy inesperado: $EXISTING_MANAGED_BY"
-  [[ "$EXISTING_MARKER" == "$MARKER" ]] || fail "Marcador de despliegue inesperado: $EXISTING_MARKER"
-  [[ "$EXISTING_ENVIRONMENT" == "$ENVIRONMENT" ]] || fail "No se permite cambiar el entorno existente ($EXISTING_ENVIRONMENT) a $ENVIRONMENT."
-  [[ "$EXISTING_DEPLOYMENT_ID" == "$DEPLOYMENT_ID" ]] || fail 'DeploymentId no coincide; revisa cuenta, región y stack.'
-fi
+  local control_count share_count
+  control_count="$(grep -o 'data-control-ventana' "$ROOT/index.html" | wc -l | tr -d ' ')"
+  share_count="$(grep -o 'id="control-compartir"' "$ROOT/index.html" | wc -l | tr -d ' ')"
+  [[ "$control_count" == '5' ]] || \
+    fail 'La aplicación debe conservar exactamente cinco controles WCO.'
+  [[ "$share_count" == '1' ]] || \
+    fail 'La aplicación debe conservar exactamente un control Compartir.'
+  grep -Fq 'url: window.location.href' "$ROOT/js/registro-sw.js" || \
+    fail 'Web Share debe usar la URL actual.'
+  grep -Fq 'const enlace = window.location.href' "$ROOT/js/registro-sw.js" || \
+    fail 'El fallback de portapapeles debe usar la URL actual.'
+  ! grep -Eiq '<style([[:space:]>])|style=' "$ROOT/offline.html" || \
+    fail 'offline.html contiene CSS inline.'
+  ! grep -Eiq "unsafe-inline|unsafe-eval" "$TEMPLATE" || \
+    fail 'La plantilla contiene una excepción CSP insegura.'
 
-cat <<PLAN
+  read -r TEMPLATE_SHA _ < <(shasum -a 256 "$TEMPLATE")
+  [[ "$TEMPLATE_SHA" =~ ^[a-f0-9]{64}$ ]] || fail 'No se pudo calcular el SHA-256.'
+}
 
-Plan local (no es un change set):
-  Acción:       $([[ "$STACK_EXISTS" == true ]] && printf 'actualizar stack propio' || printf 'crear stack nuevo')
-  Stack:        $STACK
-  StackId:      ${STACK_ID:-nuevo}
-  Entorno:      $ENVIRONMENT
-  Price class:  $PRICE_CLASS
-  Cuenta:       $ACCOUNT_ID
-  Región:       $REGION
-  DeploymentId: $DEPLOYMENT_ID
-  Template SHA: $TEMPLATE_SHA
-  Recursos:     S3 privado + CloudFront OAC + política de cabeceras
-  Retención:    el bucket y sus versiones NO se borran al eliminar el stack
-PLAN
+read_identity() {
+  ACCOUNT_ID="$("${AWS[@]}" sts get-caller-identity --query Account --output text 2>/dev/null)" || \
+    fail 'No se pudo verificar la identidad AWS activa.'
+  [[ "$ACCOUNT_ID" =~ ^[0-9]{12}$ ]] || fail 'AWS devolvió una identidad inesperada.'
+  local digest
+  read -r digest _ < <(printf '%s' "$ACCOUNT_ID:$REGION:$STACK" | shasum -a 256)
+  DEPLOYMENT_ID="${digest:0:10}"
+}
 
-if [[ "$APPLY" != true ]]; then
-  printf '\nMODO REVISIÓN: no se creó ni modificó ningún recurso.\n'
-  printf 'La escritura exige confirmar cuenta y SHA; una actualización exige además StackId.\n'
+validate_template() {
+  "${AWS[@]}" cloudformation validate-template --template-body "file://$TEMPLATE" \
+    >/dev/null 2>&1 || fail 'CloudFormation rechazó la plantilla.'
+}
+
+require_stack_absent() {
+  local error_file
+  error_file="$(mktemp)"
+  if "${AWS[@]}" cloudformation describe-stacks --stack-name "$STACK" \
+    >/dev/null 2>"$error_file"; then
+    rm -f "$error_file"
+    fail 'El nombre ya corresponde a un stack existente; este script solo crea stacks nuevos.'
+  fi
+  if ! grep -Fq 'does not exist' "$error_file"; then
+    rm -f "$error_file"
+    fail 'No se pudo demostrar que el nombre del stack esté libre.'
+  fi
+  rm -f "$error_file"
+}
+
+require_confirmations() {
+  [[ "$CONFIRM_ACCOUNT" =~ ^[0-9]{12}$ ]] || \
+    fail 'La fase solicitada exige --confirm-account con 12 dígitos.'
+  [[ "$CONFIRM_ACCOUNT" == "$ACCOUNT_ID" ]] || \
+    fail 'La cuenta confirmada no coincide con la identidad activa.'
+  [[ "$CONFIRM_TEMPLATE_SHA" == "$TEMPLATE_SHA" ]] || \
+    fail 'El SHA confirmado no coincide con la plantilla actual.'
+}
+
+validate_change_set_json() {
+  local document="$1"
+  jq -e '
+    .Status == "CREATE_COMPLETE" and
+    .ExecutionStatus == "AVAILABLE" and
+    .ChangeSetType == "CREATE" and
+    (.Changes | length == 5) and
+    (all(.Changes[];
+      .ResourceChange.Action == "Add" and
+      (.ResourceChange.Replacement == null or .ResourceChange.Replacement == "False"))) and
+    (([.Changes[].ResourceChange.LogicalResourceId] | sort) ==
+      ["ContentBucket", "ContentBucketPolicy", "Distribution", "OriginAccessControl", "SecurityHeadersPolicy"]) and
+    (([.Changes[].ResourceChange.ResourceType] | sort) ==
+      ["AWS::CloudFront::Distribution", "AWS::CloudFront::OriginAccessControl", "AWS::CloudFront::ResponseHeadersPolicy", "AWS::S3::Bucket", "AWS::S3::BucketPolicy"])
+  ' <<<"$document" >/dev/null || fail 'El change set no agrega exactamente los cinco recursos permitidos.'
+}
+
+file_mode() {
+  stat -f '%Lp' "$1" 2>/dev/null || stat -c '%a' "$1"
+}
+
+output_value() {
+  local stack_json="$1"
+  local key="$2"
+  jq -er --arg key "$key" '.Stacks[0].Outputs[] | select(.OutputKey == $key) | .OutputValue' \
+    <<<"$stack_json"
+}
+
+validate_local
+read_identity
+validate_template
+
+if [[ "$PHASE" == 'review' ]]; then
+  require_stack_absent
+  printf 'Validación local y de CloudFormation: OK\n'
+  printf 'Nombre de stack disponible: sí\n'
+  printf 'Template SHA-256: %s\n' "$TEMPLATE_SHA"
+  printf 'MODO REVIEW: no se creó ni modificó ningún recurso.\n'
   exit 0
 fi
 
-[[ "$CONFIRM_ACCOUNT" =~ ^[0-9]{12}$ ]] || fail 'Con --apply debes indicar --confirm-account con 12 dígitos.'
-[[ "$CONFIRM_ACCOUNT" == "$ACCOUNT_ID" ]] || fail 'La cuenta confirmada no coincide con la activa.'
-[[ "$CONFIRM_TEMPLATE_SHA" == "$TEMPLATE_SHA" ]] || fail 'El SHA confirmado no coincide con la plantilla actual.'
-if [[ "$STACK_EXISTS" == true ]]; then
-  [[ "$CONFIRM_STACK_ID" == "$STACK_ID" ]] || fail 'Para actualizar debes confirmar el StackId completo mostrado en la revisión.'
-else
-  [[ -z "$CONFIRM_STACK_ID" ]] || fail '--confirm-stack-id no debe usarse al crear un stack nuevo.'
-fi
+require_confirmations
 
-info 'Creando un change set sin ejecutarlo'
-CHANGE_SET_NAME="${STACK}-$(date -u +%Y%m%dT%H%M%SZ)"
-CHANGE_SET_TYPE="$([[ "$STACK_EXISTS" == true ]] && printf UPDATE || printf CREATE)"
-CHANGE_SET_ARN="$("${AWS[@]}" cloudformation create-change-set \
-  --stack-name "$STACK" \
-  --change-set-name "$CHANGE_SET_NAME" \
-  --change-set-type "$CHANGE_SET_TYPE" \
-  --description "Calculadora de Varillas template $TEMPLATE_SHA" \
-  --template-body "file://$TEMPLATE" \
-  --parameters \
-    "ParameterKey=ProjectSlug,ParameterValue=$PROJECT" \
-    "ParameterKey=Environment,ParameterValue=$ENVIRONMENT" \
-    "ParameterKey=DeploymentId,ParameterValue=$DEPLOYMENT_ID" \
-    "ParameterKey=PriceClass,ParameterValue=$PRICE_CLASS" \
-  --tags \
-    "Key=Project,Value=$PROJECT" \
-    "Key=Environment,Value=$ENVIRONMENT" \
-    'Key=ManagedBy,Value=CloudFormation' \
-    "Key=Repository,Value=$REPOSITORY" \
-    "Key=DeploymentId,Value=$DEPLOYMENT_ID" \
-  --query Id --output text)"
+if [[ "$PHASE" == 'prepare' ]]; then
+  [[ ! -e "$CHANGE_STATE" ]] || fail 'Ya existe estado local de un change set; revísalo antes de continuar.'
+  [[ ! -e "$DEPLOYMENT_STATE" ]] || fail 'Ya existe estado local de un despliegue; no se creará otro.'
+  require_stack_absent
 
-if ! "${AWS[@]}" cloudformation wait change-set-create-complete --change-set-name "$CHANGE_SET_ARN" --stack-name "$STACK"; then
-  REASON="$("${AWS[@]}" cloudformation describe-change-set --change-set-name "$CHANGE_SET_ARN" --stack-name "$STACK" --query StatusReason --output text 2>/dev/null || true)"
-  if [[ "$REASON" == *"didn't contain changes"* || "$REASON" == *'No updates are to be performed'* ]]; then
-    "${AWS[@]}" cloudformation delete-change-set --change-set-name "$CHANGE_SET_ARN" --stack-name "$STACK" >/dev/null 2>&1 || true
-    printf 'La infraestructura no tiene cambios.\n'
-    CHANGE_SET_ARN=''
-  else
-    fail "El change set no se pudo crear: $REASON"
-  fi
-fi
+  info 'Creando un change set CREATE sin ejecutarlo'
+  CHANGE_SET_NAME="${PROJECT}-create-$(date -u +%Y%m%dT%H%M%SZ)"
+  CHANGE_SET_ARN="$("${AWS[@]}" cloudformation create-change-set \
+    --stack-name "$STACK" \
+    --change-set-name "$CHANGE_SET_NAME" \
+    --change-set-type CREATE \
+    --description "Calculadora de Varillas template $TEMPLATE_SHA" \
+    --template-body "file://$TEMPLATE" \
+    --parameters \
+      "ParameterKey=ProjectSlug,ParameterValue=$PROJECT" \
+      "ParameterKey=Environment,ParameterValue=$ENVIRONMENT" \
+      "ParameterKey=DeploymentId,ParameterValue=$DEPLOYMENT_ID" \
+      "ParameterKey=PriceClass,ParameterValue=$PRICE_CLASS" \
+    --tags \
+      "Key=Project,Value=$PROJECT" \
+      "Key=Environment,Value=$ENVIRONMENT" \
+      'Key=ManagedBy,Value=CloudFormation' \
+      "Key=Repository,Value=$REPOSITORY" \
+      "Key=DeploymentId,Value=$DEPLOYMENT_ID" \
+    --query Id --output text 2>/dev/null)" || fail 'No se pudo preparar el change set.'
 
-if [[ -n "$CHANGE_SET_ARN" ]]; then
-  info 'Cambios de infraestructura propuestos'
-  "${AWS[@]}" cloudformation describe-change-set \
+  "${AWS[@]}" cloudformation wait change-set-create-complete \
     --change-set-name "$CHANGE_SET_ARN" --stack-name "$STACK" \
-    --query 'Changes[].ResourceChange.{Action:Action,LogicalId:LogicalResourceId,Type:ResourceType,Replacement:Replacement}' \
-    --output table
-  RISKY_COUNT="$("${AWS[@]}" cloudformation describe-change-set \
-    --change-set-name "$CHANGE_SET_ARN" --stack-name "$STACK" \
-    --query "length(Changes[?ResourceChange.Action=='Remove' || ResourceChange.Replacement=='True' || ResourceChange.Replacement=='Conditional'])" \
-    --output text)"
-  if [[ "$RISKY_COUNT" != '0' ]]; then
-    "${AWS[@]}" cloudformation delete-change-set --change-set-name "$CHANGE_SET_ARN" --stack-name "$STACK" >/dev/null
-    fail "Se rechazó el change set: contiene $RISKY_COUNT eliminación(es) o reemplazo(s)."
-  fi
+    >/dev/null 2>&1 || fail 'El change set no alcanzó CREATE_COMPLETE.'
 
-  info 'Ejecutando el change set revisado'
-  "${AWS[@]}" cloudformation execute-change-set --change-set-name "$CHANGE_SET_ARN" --stack-name "$STACK"
-  if [[ "$CHANGE_SET_TYPE" == 'CREATE' ]]; then
-    "${AWS[@]}" cloudformation wait stack-create-complete --stack-name "$STACK"
-  else
-    "${AWS[@]}" cloudformation wait stack-update-complete --stack-name "$STACK_ID"
-  fi
+  CHANGE_SET_JSON="$("${AWS[@]}" cloudformation describe-change-set \
+    --change-set-name "$CHANGE_SET_ARN" --stack-name "$STACK" --output json 2>/dev/null)" || \
+    fail 'No se pudo volver a leer el change set.'
+  validate_change_set_json "$CHANGE_SET_JSON"
+  STACK_ID="$(jq -er '.StackId' <<<"$CHANGE_SET_JSON")"
+
+  jq -n \
+    --arg stack "$STACK" \
+    --arg stackId "$STACK_ID" \
+    --arg changeSetArn "$CHANGE_SET_ARN" \
+    --arg region "$REGION" \
+    --arg environment "$ENVIRONMENT" \
+    --arg priceClass "$PRICE_CLASS" \
+    --arg account "$ACCOUNT_ID" \
+    --arg deploymentId "$DEPLOYMENT_ID" \
+    --arg templateSha256 "$TEMPLATE_SHA" \
+    --arg preparedAt "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+    '{stack: $stack, stackId: $stackId, changeSetArn: $changeSetArn, region: $region,
+      environment: $environment, priceClass: $priceClass, account: $account,
+      deploymentId: $deploymentId, templateSha256: $templateSha256,
+      preparedAt: $preparedAt}' >"$CHANGE_STATE"
+  chmod 600 "$CHANGE_STATE"
+  [[ "$(file_mode "$CHANGE_STATE")" == '600' ]] || fail 'No se pudo proteger el estado local.'
+
+  printf 'Change set CREATE preparado y validado; no fue ejecutado.\n'
+  printf 'Estado local protegido en .aws-change-set.json.\n'
+  exit 0
 fi
 
-STACK_ID="$("${AWS[@]}" cloudformation describe-stacks --stack-name "$STACK" --query 'Stacks[0].StackId' --output text)"
-"${AWS[@]}" cloudformation set-stack-policy --stack-name "$STACK_ID" --stack-policy-body "file://$STACK_POLICY"
+[[ -f "$CHANGE_STATE" ]] || fail 'Falta .aws-change-set.json; ejecuta primero la fase prepare.'
+[[ "$(file_mode "$CHANGE_STATE")" == '600' ]] || fail '.aws-change-set.json debe tener modo 0600.'
+[[ ! -e "$DEPLOYMENT_STATE" ]] || fail 'Ya existe estado local de un despliegue; no se ejecutará otro.'
+
+jq -e \
+  --arg stack "$STACK" \
+  --arg region "$REGION" \
+  --arg environment "$ENVIRONMENT" \
+  --arg priceClass "$PRICE_CLASS" \
+  --arg account "$ACCOUNT_ID" \
+  --arg deploymentId "$DEPLOYMENT_ID" \
+  --arg templateSha256 "$TEMPLATE_SHA" \
+  '.stack == $stack and .region == $region and .environment == $environment and
+   .priceClass == $priceClass and .account == $account and
+   .deploymentId == $deploymentId and .templateSha256 == $templateSha256 and
+   (.stackId | type == "string") and (.changeSetArn | type == "string")' \
+  "$CHANGE_STATE" >/dev/null || fail 'El estado preparado no coincide con esta ejecución.'
+
+STACK_ID="$(jq -er '.stackId' "$CHANGE_STATE")"
+CHANGE_SET_ARN="$(jq -er '.changeSetArn' "$CHANGE_STATE")"
+CHANGE_SET_JSON="$("${AWS[@]}" cloudformation describe-change-set \
+  --change-set-name "$CHANGE_SET_ARN" --stack-name "$STACK_ID" --output json 2>/dev/null)" || \
+  fail 'El change set preparado ya no está disponible.'
+validate_change_set_json "$CHANGE_SET_JSON"
+[[ "$(jq -r '.StackId' <<<"$CHANGE_SET_JSON")" == "$STACK_ID" ]] || \
+  fail 'El change set ya no pertenece al stack preparado.'
+
+STACK_STATUS="$("${AWS[@]}" cloudformation describe-stacks --stack-name "$STACK_ID" \
+  --query 'Stacks[0].StackStatus' --output text 2>/dev/null)" || \
+  fail 'No se pudo verificar el stack en revisión.'
+[[ "$STACK_STATUS" == 'REVIEW_IN_PROGRESS' ]] || \
+  fail 'El stack ya no está exclusivamente en estado de revisión.'
+PREVIOUS_RESOURCES="$("${AWS[@]}" cloudformation list-stack-resources --stack-name "$STACK_ID" \
+  --query 'length(StackResourceSummaries)' --output text 2>/dev/null)" || \
+  fail 'No se pudo comprobar que el stack esté vacío.'
+[[ "$PREVIOUS_RESOURCES" == '0' ]] || fail 'El stack preparado ya contiene recursos.'
+
+info 'Ejecutando una vez el change set CREATE validado'
+"${AWS[@]}" cloudformation execute-change-set \
+  --change-set-name "$CHANGE_SET_ARN" --stack-name "$STACK_ID" \
+  >/dev/null 2>&1 || fail 'CloudFormation no aceptó la ejecución.'
+"${AWS[@]}" cloudformation wait stack-create-complete --stack-name "$STACK_ID" \
+  >/dev/null 2>&1 || fail 'El stack no alcanzó CREATE_COMPLETE; no se publicaron archivos.'
+
+STACK_JSON="$("${AWS[@]}" cloudformation describe-stacks --stack-name "$STACK_ID" --output json 2>/dev/null)" || \
+  fail 'No se pudo verificar el stack creado.'
+jq -e \
+  --arg project "$PROJECT" \
+  --arg repository "$REPOSITORY" \
+  --arg environment "$ENVIRONMENT" \
+  --arg marker "$MARKER" \
+  '.Stacks[0].StackStatus == "CREATE_COMPLETE" and
+   any(.Stacks[0].Tags[]; .Key == "Project" and .Value == $project) and
+   any(.Stacks[0].Tags[]; .Key == "Repository" and .Value == $repository) and
+   any(.Stacks[0].Tags[]; .Key == "ManagedBy" and .Value == "CloudFormation") and
+   any(.Stacks[0].Parameters[]; .ParameterKey == "Environment" and .ParameterValue == $environment) and
+   any(.Stacks[0].Outputs[]; .OutputKey == "DeploymentMarker" and .OutputValue == $marker)' \
+  <<<"$STACK_JSON" >/dev/null || fail 'La identidad del stack creado no coincide.'
+
+RESOURCES_JSON="$("${AWS[@]}" cloudformation list-stack-resources --stack-name "$STACK_ID" --output json 2>/dev/null)" || \
+  fail 'No se pudieron verificar los recursos creados.'
+jq -e '
+  (.StackResourceSummaries | length == 5) and
+  (([.StackResourceSummaries[].LogicalResourceId] | sort) ==
+    ["ContentBucket", "ContentBucketPolicy", "Distribution", "OriginAccessControl", "SecurityHeadersPolicy"]) and
+  (([.StackResourceSummaries[].ResourceType] | sort) ==
+    ["AWS::CloudFront::Distribution", "AWS::CloudFront::OriginAccessControl", "AWS::CloudFront::ResponseHeadersPolicy", "AWS::S3::Bucket", "AWS::S3::BucketPolicy"])
+' <<<"$RESOURCES_JSON" >/dev/null || fail 'CloudFormation creó recursos inesperados.'
+
+BUCKET="$(output_value "$STACK_JSON" ContentBucketName)"
+BUCKET_ARN="$(output_value "$STACK_JSON" ContentBucketArn)"
+BUCKET_DOMAIN="$(output_value "$STACK_JSON" ContentBucketRegionalDomainName)"
+DISTRIBUTION_ID="$(output_value "$STACK_JSON" DistributionId)"
+DISTRIBUTION_ARN="$(output_value "$STACK_JSON" DistributionArn)"
+DISTRIBUTION_DOMAIN="$(output_value "$STACK_JSON" DistributionDomainName)"
+OAC_ID="$(output_value "$STACK_JSON" OriginAccessControlId)"
+HEADERS_POLICY_ID="$(output_value "$STACK_JSON" SecurityHeadersPolicyId)"
+SITE_URL="$(output_value "$STACK_JSON" SiteUrl)"
+[[ "$SITE_URL" == "https://$DISTRIBUTION_DOMAIN" ]] || fail 'La URL pública no coincide con la distribución.'
+
+OBJECT_COUNT="$("${AWS[@]}" s3api list-objects-v2 --bucket "$BUCKET" \
+  --expected-bucket-owner "$ACCOUNT_ID" --max-keys 1 --query KeyCount --output text 2>/dev/null)" || \
+  fail 'No se pudo comprobar que el bucket esté vacío.'
+[[ "$OBJECT_COUNT" == '0' ]] || fail 'El bucket nuevo no está vacío; no se publicará contenido.'
+
+info 'Aplicando protecciones antes de publicar contenido'
+"${AWS[@]}" cloudformation set-stack-policy --stack-name "$STACK_ID" \
+  --stack-policy-body "file://$STACK_POLICY" >/dev/null 2>&1 || \
+  fail 'No se pudo aplicar la stack policy.'
+REMOTE_STACK_POLICY="$("${AWS[@]}" cloudformation get-stack-policy --stack-name "$STACK_ID" \
+  --query StackPolicyBody --output text 2>/dev/null)" || fail 'No se pudo verificar la stack policy.'
+[[ "$(jq -cS . <<<"$REMOTE_STACK_POLICY")" == "$(jq -cS . "$STACK_POLICY")" ]] || \
+  fail 'La stack policy aplicada no coincide.'
+
 if [[ "$ENVIRONMENT" == 'prod' ]]; then
-  "${AWS[@]}" cloudformation update-termination-protection --enable-termination-protection --stack-name "$STACK_ID" >/dev/null
-  printf 'Protección de terminación: activada (prod).\n'
+  "${AWS[@]}" cloudformation update-termination-protection \
+    --enable-termination-protection --stack-name "$STACK_ID" >/dev/null 2>&1 || \
+    fail 'No se pudo activar termination protection.'
+  TERMINATION_PROTECTION="$("${AWS[@]}" cloudformation describe-stacks --stack-name "$STACK_ID" \
+    --query 'Stacks[0].EnableTerminationProtection' --output text 2>/dev/null)"
+  [[ "$TERMINATION_PROTECTION" == 'True' || "$TERMINATION_PROTECTION" == 'true' ]] || \
+    fail 'Termination protection no quedó activa.'
 fi
 
-output() {
-  local key="$1"
-  "${AWS[@]}" cloudformation describe-stacks --stack-name "$STACK_ID" \
-    --query "Stacks[0].Outputs[?OutputKey=='$key'].OutputValue | [0]" --output text
-}
-BUCKET="$(output ContentBucketName)"
-DISTRIBUTION_ID="$(output DistributionId)"
-SITE_URL="$(output SiteUrl)"
-[[ -n "$BUCKET" && "$BUCKET" != 'None' ]] || fail 'No se obtuvo ContentBucketName.'
-[[ -n "$DISTRIBUTION_ID" && "$DISTRIBUTION_ID" != 'None' ]] || fail 'No se obtuvo DistributionId.'
-[[ "$SITE_URL" == https://* ]] || fail 'No se obtuvo una URL HTTPS válida.'
+info 'Verificando privacidad, OAC, HTTPS y cabeceras antes del upload'
+PUBLIC_BLOCK_JSON="$("${AWS[@]}" s3api get-public-access-block --bucket "$BUCKET" \
+  --expected-bucket-owner "$ACCOUNT_ID" --output json 2>/dev/null)" || fail 'No se pudo verificar Block Public Access.'
+jq -e '.PublicAccessBlockConfiguration |
+  .BlockPublicAcls == true and .IgnorePublicAcls == true and
+  .BlockPublicPolicy == true and .RestrictPublicBuckets == true' \
+  <<<"$PUBLIC_BLOCK_JSON" >/dev/null || fail 'Block Public Access no está completo.'
 
-info 'Verificando bucket y objetos existentes'
-"${AWS[@]}" s3api head-bucket --bucket "$BUCKET" --expected-bucket-owner "$ACCOUNT_ID"
-BUCKET_PROJECT="$("${AWS[@]}" s3api get-bucket-tagging --bucket "$BUCKET" --expected-bucket-owner "$ACCOUNT_ID" --query "TagSet[?Key=='Project'].Value | [0]" --output text)"
-BUCKET_DEPLOYMENT="$("${AWS[@]}" s3api get-bucket-tagging --bucket "$BUCKET" --expected-bucket-owner "$ACCOUNT_ID" --query "TagSet[?Key=='DeploymentId'].Value | [0]" --output text)"
-[[ "$BUCKET_PROJECT" == "$PROJECT" && "$BUCKET_DEPLOYMENT" == "$DEPLOYMENT_ID" ]] || fail 'Las etiquetas del bucket no coinciden con este despliegue.'
-CURRENT_KEYS="$("${AWS[@]}" s3api list-objects-v2 --bucket "$BUCKET" --expected-bucket-owner "$ACCOUNT_ID" --query 'Contents[].Key' --output text)"
-[[ "$CURRENT_KEYS" == 'None' ]] && CURRENT_KEYS=''
-for key in $CURRENT_KEYS; do
-  expected=false
-  for relative in "${PUBLIC_FILES[@]}"; do [[ "$key" == "$relative" ]] && expected=true && break; done
-  [[ "$expected" == true ]] || fail "El bucket contiene un objeto fuera de la allowlist: $key. Revísalo antes de publicar."
-done
+OWNERSHIP_JSON="$("${AWS[@]}" s3api get-bucket-ownership-controls --bucket "$BUCKET" \
+  --expected-bucket-owner "$ACCOUNT_ID" --output json 2>/dev/null)" || fail 'No se pudo verificar Object Ownership.'
+jq -e '.OwnershipControls.Rules | length == 1 and .[0].ObjectOwnership == "BucketOwnerEnforced"' \
+  <<<"$OWNERSHIP_JSON" >/dev/null || fail 'Object Ownership no es BucketOwnerEnforced.'
+
+ENCRYPTION_JSON="$("${AWS[@]}" s3api get-bucket-encryption --bucket "$BUCKET" \
+  --expected-bucket-owner "$ACCOUNT_ID" --output json 2>/dev/null)" || fail 'No se pudo verificar el cifrado.'
+jq -e '.ServerSideEncryptionConfiguration.Rules | length >= 1 and
+  all(.[]; .ApplyServerSideEncryptionByDefault.SSEAlgorithm == "AES256")' \
+  <<<"$ENCRYPTION_JSON" >/dev/null || fail 'El bucket no usa exclusivamente SSE-S3.'
+
+VERSIONING_STATUS="$("${AWS[@]}" s3api get-bucket-versioning --bucket "$BUCKET" \
+  --expected-bucket-owner "$ACCOUNT_ID" --query Status --output text 2>/dev/null)" || \
+  fail 'No se pudo verificar el versionado.'
+[[ "$VERSIONING_STATUS" == 'Enabled' ]] || fail 'El versionado no está activo.'
+
+POLICY_STATUS="$("${AWS[@]}" s3api get-bucket-policy-status --bucket "$BUCKET" \
+  --expected-bucket-owner "$ACCOUNT_ID" --query PolicyStatus.IsPublic --output text 2>/dev/null)" || \
+  fail 'No se pudo verificar si la política del bucket es pública.'
+[[ "$POLICY_STATUS" == 'False' || "$POLICY_STATUS" == 'false' ]] || fail 'La política del bucket se considera pública.'
+
+POLICY_TEXT="$("${AWS[@]}" s3api get-bucket-policy --bucket "$BUCKET" \
+  --expected-bucket-owner "$ACCOUNT_ID" --query Policy --output text 2>/dev/null)" || \
+  fail 'No se pudo verificar la política del bucket.'
+jq -e --arg bucketArn "$BUCKET_ARN" --arg distributionArn "$DISTRIBUTION_ARN" '
+  any(.Statement[];
+    .Sid == "AllowCloudFrontReadOnly" and .Effect == "Allow" and
+    .Principal.Service == "cloudfront.amazonaws.com" and
+    (.Action == ["s3:GetObject"] or .Action == "s3:GetObject") and
+    .Resource == ($bucketArn + "/*") and
+    .Condition.StringEquals["AWS:SourceArn"] == $distributionArn) and
+  any(.Statement[];
+    .Sid == "DenyInsecureTransport" and .Effect == "Deny" and
+    .Principal == "*" and .Condition.Bool["aws:SecureTransport"] == "false") and
+  all(.Statement[]; .Effect != "Allow" or .Principal != "*")
+' <<<"$POLICY_TEXT" >/dev/null || fail 'La política del bucket no coincide con el acceso privado esperado.'
+
+DISTRIBUTION_JSON="$("${AWS[@]}" cloudfront get-distribution-config --id "$DISTRIBUTION_ID" \
+  --output json 2>/dev/null)" || fail 'No se pudo verificar CloudFront.'
+jq -e --arg oac "$OAC_ID" --arg headers "$HEADERS_POLICY_ID" --arg bucketDomain "$BUCKET_DOMAIN" '
+  .DistributionConfig.Origins.Quantity == 1 and
+  .DistributionConfig.Origins.Items[0].DomainName == $bucketDomain and
+  .DistributionConfig.Origins.Items[0].OriginAccessControlId == $oac and
+  .DistributionConfig.Origins.Items[0].S3OriginConfig.OriginAccessIdentity == "" and
+  .DistributionConfig.DefaultCacheBehavior.ViewerProtocolPolicy == "redirect-to-https" and
+  ((.DistributionConfig.DefaultCacheBehavior.AllowedMethods.Items | sort) == ["GET", "HEAD"]) and
+  ((.DistributionConfig.DefaultCacheBehavior.AllowedMethods.CachedMethods.Items | sort) == ["GET", "HEAD"]) and
+  .DistributionConfig.DefaultCacheBehavior.ResponseHeadersPolicyId == $headers and
+  .DistributionConfig.Aliases.Quantity == 0 and
+  .DistributionConfig.Logging.Enabled == false
+' <<<"$DISTRIBUTION_JSON" >/dev/null || fail 'La distribución no conserva el origen, métodos o límites esperados.'
+
+OAC_JSON="$("${AWS[@]}" cloudfront get-origin-access-control --id "$OAC_ID" --output json 2>/dev/null)" || \
+  fail 'No se pudo verificar el OAC.'
+jq -e '.OriginAccessControl.OriginAccessControlConfig |
+  .OriginAccessControlOriginType == "s3" and .SigningBehavior == "always" and .SigningProtocol == "sigv4"' \
+  <<<"$OAC_JSON" >/dev/null || fail 'El OAC no usa firma SigV4 permanente.'
+
+HEADERS_JSON="$("${AWS[@]}" cloudfront get-response-headers-policy-config \
+  --id "$HEADERS_POLICY_ID" --output json 2>/dev/null)" || fail 'No se pudo verificar la política de cabeceras.'
+jq -e '
+  .ResponseHeadersPolicyConfig.SecurityHeadersConfig as $security |
+  ($security.ContentSecurityPolicy.ContentSecurityPolicy | contains("default-src '\''self'\''")) and
+  ($security.ContentSecurityPolicy.ContentSecurityPolicy | contains("unsafe-inline") | not) and
+  ($security.ContentSecurityPolicy.ContentSecurityPolicy | contains("unsafe-eval") | not) and
+  $security.FrameOptions.FrameOption == "DENY" and
+  $security.ContentTypeOptions.Override == true and
+  $security.StrictTransportSecurity.AccessControlMaxAgeSec == 47304000 and
+  $security.StrictTransportSecurity.IncludeSubdomains == false and
+  $security.StrictTransportSecurity.Preload == false and
+  $security.ReferrerPolicy.ReferrerPolicy == "strict-origin-when-cross-origin" and
+  ($security | has("XSSProtection") | not) and
+  any(.ResponseHeadersPolicyConfig.CustomHeadersConfig.Items[];
+    (.Header | ascii_downcase) == "permissions-policy" and
+    (.Value | contains("clipboard-write=(self)")) and (.Value | contains("web-share=(self)")))
+' <<<"$HEADERS_JSON" >/dev/null || fail 'Las cabeceras configuradas no cumplen la política esperada.'
+
+HTTP_RESULT="$(curl --silent --output /dev/null --write-out '%{http_code}|%{redirect_url}' \
+  "http://$DISTRIBUTION_DOMAIN/" 2>/dev/null)" || fail 'No se pudo comprobar la redirección HTTPS.'
+HTTP_CODE="${HTTP_RESULT%%|*}"
+HTTP_LOCATION="${HTTP_RESULT#*|}"
+[[ "$HTTP_CODE" =~ ^30[1278]$ && "$HTTP_LOCATION" == "https://$DISTRIBUTION_DOMAIN/" ]] || \
+  fail 'CloudFront no redirige el origen HTTP esperado a HTTPS.'
+
+PREUPLOAD_HEADERS="$(mktemp)"
+PREUPLOAD_STATUS="$(curl --silent --head --dump-header "$PREUPLOAD_HEADERS" --output /dev/null \
+  --write-out '%{http_code}' "$SITE_URL/" 2>/dev/null)" || fail 'No se pudo comprobar CloudFront antes del upload.'
+[[ "$PREUPLOAD_STATUS" == '403' ]] || fail 'CloudFront no confirmó un origen vacío y privado antes del upload.'
+grep -Eiq '^content-security-policy:' "$PREUPLOAD_HEADERS" || fail 'Falta CSP antes del upload.'
+grep -Eiq '^strict-transport-security:[[:space:]]*max-age=47304000' "$PREUPLOAD_HEADERS" || fail 'Falta HSTS antes del upload.'
+! grep -Eiq '^x-xss-protection:' "$PREUPLOAD_HEADERS" || fail 'CloudFront añadió el encabezado X-XSS-Protection obsoleto.'
+rm -f "$PREUPLOAD_HEADERS"
+
+DIRECT_STATUS="$(curl --silent --head --output /dev/null --write-out '%{http_code}' \
+  "https://$BUCKET_DOMAIN/index.html" 2>/dev/null)" || fail 'No se pudo comprobar el acceso S3 directo.'
+[[ "$DIRECT_STATUS" == '403' ]] || fail 'El acceso S3 anónimo directo no devolvió 403.'
 
 upload() {
-  local relative="$1" type="$2" cache="$3"
-  # Usamos la API de bajo nivel porque --expected-bucket-owner no está
-  # disponible en todas las versiones del comando de alto nivel `aws s3 cp`.
+  local relative="$1"
+  local content_type="$2"
+  local cache_control="$3"
   "${AWS[@]}" s3api put-object \
     --bucket "$BUCKET" \
     --key "$relative" \
     --body "$ROOT/$relative" \
     --expected-bucket-owner "$ACCOUNT_ID" \
-    --content-type "$type" \
-    --cache-control "$cache" \
+    --content-type "$content_type" \
+    --cache-control "$cache_control" \
     --server-side-encryption AES256 \
-    >/dev/null
+    >/dev/null 2>&1 || fail "No se pudo publicar $relative"
   printf '  ✓ %s\n' "$relative"
 }
 
-info "Publicando archivos exactos en s3://$BUCKET (recursos primero)"
+info 'Publicando la allowlist exacta: recursos primero'
 NO_CACHE='no-cache, max-age=0, must-revalidate'
 SHORT_CACHE='public, max-age=3600, must-revalidate'
 ICON_CACHE='public, max-age=86400, must-revalidate'
@@ -318,28 +544,36 @@ upload manifest.webmanifest 'application/manifest+json; charset=utf-8' "$NO_CACH
 upload sw.js 'text/javascript; charset=utf-8' "$NO_CACHE"
 upload index.html 'text/html; charset=utf-8' "$NO_CACHE"
 
-info 'Invalidando CloudFront'
-INVALIDATION_ID="$("${AWS[@]}" cloudfront create-invalidation --distribution-id "$DISTRIBUTION_ID" --paths '/*' --query Invalidation.Id --output text)"
-"${AWS[@]}" cloudfront wait invalidation-completed --distribution-id "$DISTRIBUTION_ID" --id "$INVALIDATION_ID"
-printf 'Invalidación completada: %s\n' "$INVALIDATION_ID"
+info 'Invalidando únicamente la distribución creada'
+INVALIDATION_ID="$("${AWS[@]}" cloudfront create-invalidation \
+  --distribution-id "$DISTRIBUTION_ID" --paths '/*' --query Invalidation.Id --output text 2>/dev/null)" || \
+  fail 'No se pudo crear la invalidación.'
+"${AWS[@]}" cloudfront wait invalidation-completed \
+  --distribution-id "$DISTRIBUTION_ID" --id "$INVALIDATION_ID" \
+  >/dev/null 2>&1 || fail 'La invalidación no se completó.'
 
-info 'Verificando la URL pública'
 "$ROOT/scripts/verify-site.sh" "$SITE_URL"
 
-cat > "$ROOT/.aws-deployment.json" <<JSON
-{
-  "stack": "$STACK",
-  "stackId": "$STACK_ID",
-  "region": "$REGION",
-  "environment": "$ENVIRONMENT",
-  "deploymentId": "$DEPLOYMENT_ID",
-  "templateSha256": "$TEMPLATE_SHA",
-  "contentBucket": "$BUCKET",
-  "distributionId": "$DISTRIBUTION_ID",
-  "siteUrl": "$SITE_URL"
-}
-JSON
-chmod 600 "$ROOT/.aws-deployment.json"
+DIRECT_STATUS="$(curl --silent --head --output /dev/null --write-out '%{http_code}' \
+  "https://$BUCKET_DOMAIN/index.html" 2>/dev/null)" || fail 'No se pudo repetir la comprobación S3 directa.'
+[[ "$DIRECT_STATUS" == '403' ]] || fail 'S3 directo dejó de rechazar acceso anónimo después del upload.'
 
-printf '\nDESPLIEGUE COMPLETADO\nURL: %s\nStackId: %s\nDistribución: %s\nBucket: %s (privado y retenido)\n' \
-  "$SITE_URL" "$STACK_ID" "$DISTRIBUTION_ID" "$BUCKET"
+jq -n \
+  --arg stack "$STACK" \
+  --arg stackId "$STACK_ID" \
+  --arg region "$REGION" \
+  --arg environment "$ENVIRONMENT" \
+  --arg deploymentId "$DEPLOYMENT_ID" \
+  --arg templateSha256 "$TEMPLATE_SHA" \
+  --arg contentBucket "$BUCKET" \
+  --arg distributionId "$DISTRIBUTION_ID" \
+  --arg siteUrl "$SITE_URL" \
+  --arg deployedAt "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+  '{stack: $stack, stackId: $stackId, region: $region, environment: $environment,
+    deploymentId: $deploymentId, templateSha256: $templateSha256,
+    contentBucket: $contentBucket, distributionId: $distributionId,
+    siteUrl: $siteUrl, deployedAt: $deployedAt}' >"$DEPLOYMENT_STATE"
+chmod 600 "$DEPLOYMENT_STATE"
+[[ "$(file_mode "$DEPLOYMENT_STATE")" == '600' ]] || fail 'No se pudo proteger el estado del despliegue.'
+
+printf '\nDESPLIEGUE COMPLETADO\nURL: %s\n' "$SITE_URL"

@@ -1,19 +1,18 @@
 AWSTemplateFormatVersion: '2010-09-09'
 Description: >-
-  Calculadora de Varillas: sitio estático seguro con un bucket S3 privado,
-  CloudFront, Origin Access Control y cabeceras de seguridad.
+  Calculadora de Varillas: PWA estática con bucket S3 privado, CloudFront,
+  Origin Access Control y cabeceras de seguridad.
 
 Parameters:
   ProjectSlug:
     Type: String
     Default: calculadora-varillas-pwa
-    Description: Identificador corto para nombres y etiquetas.
+    Description: Identificador corto para etiquetas y nombres lógicos.
     AllowedPattern: '^[a-z0-9][a-z0-9-]{1,30}[a-z0-9]$'
     ConstraintDescription: Usa 3-32 caracteres en minúscula, números o guiones.
 
   Environment:
     Type: String
-    Default: dev
     Description: Entorno lógico de la aplicación.
     AllowedValues:
       - dev
@@ -23,9 +22,7 @@ Parameters:
 
   DeploymentId:
     Type: String
-    Description: >-
-      Identificador estable y único derivado de cuenta, región y stack. Evita
-      colisiones de nombres globales de CloudFront.
+    Description: Identificador estable derivado localmente de cuenta, región y stack.
     AllowedPattern: '^[a-f0-9]{10}$'
     ConstraintDescription: Debe contener exactamente 10 caracteres hexadecimales.
 
@@ -41,7 +38,7 @@ Parameters:
 Resources:
   ContentBucket:
     Type: AWS::S3::Bucket
-    DeletionPolicy: Retain
+    DeletionPolicy: RetainExceptOnCreate
     UpdateReplacePolicy: Retain
     Properties:
       BucketEncryption:
@@ -77,7 +74,7 @@ Resources:
     Properties:
       OriginAccessControlConfig:
         Name: !Sub '${ProjectSlug}-${Environment}-${DeploymentId}-oac'
-        Description: !Sub 'Acceso firmado de CloudFront al bucket de ${ProjectSlug}'
+        Description: !Sub 'Acceso firmado de CloudFront al origen de ${ProjectSlug}'
         OriginAccessControlOriginType: s3
         SigningBehavior: always
         SigningProtocol: sigv4
@@ -93,7 +90,7 @@ Resources:
             ContentSecurityPolicy: >-
               default-src 'self'; base-uri 'self'; object-src 'none';
               frame-ancestors 'none'; form-action 'self'; script-src 'self';
-              style-src 'self'; img-src 'self' data:; connect-src 'self';
+              style-src 'self'; img-src 'self'; connect-src 'self';
               font-src 'self'; manifest-src 'self'; worker-src 'self';
               upgrade-insecure-requests
             Override: true
@@ -106,20 +103,20 @@ Resources:
             ReferrerPolicy: strict-origin-when-cross-origin
             Override: true
           StrictTransportSecurity:
-            AccessControlMaxAgeSec: 31536000
+            AccessControlMaxAgeSec: 47304000
             IncludeSubdomains: false
             Preload: false
-            Override: true
-          XSSProtection:
-            Protection: true
-            ModeBlock: true
             Override: true
         CustomHeadersConfig:
           Items:
             - Header: Permissions-Policy
               Value: >-
-                accelerometer=(), autoplay=(), camera=(), geolocation=(),
-                gyroscope=(), magnetometer=(), microphone=(), payment=(), usb=()
+                accelerometer=(), autoplay=(), camera=(), clipboard-read=(),
+                clipboard-write=(self), display-capture=(), encrypted-media=(),
+                fullscreen=(), geolocation=(), gyroscope=(), magnetometer=(),
+                microphone=(), midi=(), payment=(), picture-in-picture=(),
+                publickey-credentials-get=(), screen-wake-lock=(), serial=(),
+                usb=(), web-share=(self), xr-spatial-tracking=()
               Override: true
 
   Distribution:
@@ -144,13 +141,17 @@ Resources:
           AllowedMethods:
             - GET
             - HEAD
-            - OPTIONS
           CachedMethods:
             - GET
             - HEAD
-            - OPTIONS
           Compress: true
-          CachePolicyId: 658327ea-f89d-4fab-a63d-7e88639e58f6
+          DefaultTTL: 3600
+          MaxTTL: 86400
+          MinTTL: 0
+          ForwardedValues:
+            QueryString: false
+            Cookies:
+              Forward: none
           ResponseHeadersPolicyId: !Ref SecurityHeadersPolicy
         ViewerCertificate:
           CloudFrontDefaultCertificate: true
@@ -197,11 +198,11 @@ Resources:
 
 Outputs:
   DeploymentMarker:
-    Description: Identidad inmutable que los scripts verifican antes de modificar el stack.
+    Description: Marcador inmutable que verifican los scripts.
     Value: calculadora-varillas-pwa-cloudfront-oac-v1
 
   DeploymentId:
-    Description: Identificador único usado por los recursos globales de CloudFront.
+    Description: Identificador estable de esta creación.
     Value: !Ref DeploymentId
 
   Environment:
@@ -213,21 +214,33 @@ Outputs:
     Value: !Sub 'https://${Distribution.DomainName}'
 
   DistributionId:
-    Description: ID de la distribución CloudFront.
+    Description: Identificador de la distribución creada.
     Value: !Ref Distribution
 
   DistributionArn:
-    Description: ARN de la distribución CloudFront.
+    Description: ARN de la distribución creada.
     Value: !Sub 'arn:${AWS::Partition}:cloudfront::${AWS::AccountId}:distribution/${Distribution}'
 
   DistributionDomainName:
     Description: Dominio asignado por CloudFront.
     Value: !GetAtt Distribution.DomainName
 
+  OriginAccessControlId:
+    Description: Identificador del OAC creado.
+    Value: !GetAtt OriginAccessControl.Id
+
+  SecurityHeadersPolicyId:
+    Description: Identificador de la política de cabeceras creada.
+    Value: !Ref SecurityHeadersPolicy
+
   ContentBucketName:
-    Description: Bucket privado que contiene los archivos.
+    Description: Nombre generado del bucket privado.
     Value: !Ref ContentBucket
 
   ContentBucketArn:
     Description: ARN del bucket privado.
     Value: !GetAtt ContentBucket.Arn
+
+  ContentBucketRegionalDomainName:
+    Description: Endpoint regional privado usado como origen.
+    Value: !GetAtt ContentBucket.RegionalDomainName

@@ -12,7 +12,7 @@ cd calculadora-varillas-pwa
 npm start
 ```
 
-Abre `http://localhost:8080/`. La aplicación no instala dependencias ni requiere credenciales para el desarrollo local.
+Abre `http://127.0.0.1:8080/`. El servidor escucha solo en loopback; la aplicación no instala dependencias ni requiere credenciales para el desarrollo local.
 
 ## Flujo recomendado
 
@@ -31,7 +31,10 @@ node --check js/app.js
 node --check js/registro-sw.js
 node --check sw.js
 node --check herramientas/servidor.mjs
-node -e "JSON.parse(require('fs').readFileSync('manifest.webmanifest', 'utf8'))"
+node -e "JSON.parse(require('node:fs').readFileSync('manifest.webmanifest', 'utf8'))"
+bash -n scripts/deploy-aws.sh
+bash -n scripts/verify-site.sh
+shellcheck scripts/deploy-aws.sh scripts/verify-site.sh
 ```
 
 Después, prueba en el navegador:
@@ -40,21 +43,23 @@ Después, prueba en el navegador:
 - método por cuantía y por carga axial;
 - errores por dato vacío, cuantía fuera de 1 %–6 % y sección insuficiente;
 - presentación en móvil y escritorio;
-- los cinco controles de la barra, incluido «Compartir» mediante Web Share y copia de URL;
+- exactamente cinco controles de la barra y un solo «Compartir»;
+- Web Share, Clipboard API y fallback de copia con la URL actual y feedback accesible;
 - recarga sin conexión después de una primera visita;
 - actualización del service worker si cambiaste el app shell.
 
-Para infraestructura, usa primero el modo de revisión sin `--apply`:
+Para infraestructura, ejecuta únicamente la fase de revisión:
 
 ```bash
 ./scripts/deploy-aws.sh \
+  --phase review \
   --profile <YOUR_AWS_PROFILE> \
   --region <YOUR_AWS_REGION> \
-  --stack <YOUR_STACK_NAME> \
+  --stack <YOUR_NEW_STACK_NAME> \
   --environment <YOUR_ENVIRONMENT>
 ```
 
-`--profile` es opcional; omítelo para usar la cadena estándar de credenciales de AWS. Usa SSO o credenciales temporales de mínimo privilegio, comprueba la identidad activa y no uses credenciales administrativas como opción habitual. No publiques credenciales, identificadores de cuenta, ARN, nombres físicos, archivos `.env`, `.aws-deployment.json` ni outputs de despliegue.
+`--profile` es opcional. Usa SSO o credenciales temporales de mínimo privilegio, comprueba la identidad activa y no uses credenciales administrativas como opción habitual. La escritura se divide en `prepare` y `execute`, admite únicamente un change set `CREATE` y requiere confirmaciones exactas. No publiques credenciales, identificadores de cuenta, ARN, nombres físicos, archivos `.env`, `.aws-change-set.json`, `.aws-deployment.json` ni outputs.
 
 ## Estilo
 
@@ -65,12 +70,4 @@ Para infraestructura, usa primero el modo de revisión sin `--apply`:
 
 ## Cambios de cálculo
 
-Un pull request que altere resultados debe incluir al menos:
-
-- valores de entrada;
-- desarrollo manual independiente;
-- resultado anterior y nuevo;
-- cláusula normativa aplicable;
-- explicación de unidades y redondeos.
-
-La herramienta no reemplaza la revisión de un ingeniero estructural.
+Un pull request que altere resultados debe incluir valores de entrada, desarrollo manual independiente, resultado anterior y nuevo, cláusula normativa aplicable y explicación de unidades/redondeos. La herramienta no reemplaza la revisión de un ingeniero estructural.

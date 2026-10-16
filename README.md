@@ -6,7 +6,7 @@ PWA sin dependencias que calcula **cuántas varillas longitudinales necesita una
 
 ## Repositorio público
 
-El código público vive en [`ErickrU/calculadora-varillas-pwa`](https://github.com/ErickrU/calculadora-varillas-pwa). Este repositorio no registra ni afirma que exista un despliegue AWS activo. Incluye infraestructura genérica para publicar una instancia propia; consulta la [plantilla de estado](docs/DEPLOYMENT-STATUS.md) y la [guía segura de AWS](docs/AWS-DEPLOYMENT.md).
+El código público vive en [`ErickrU/calculadora-varillas-pwa`](https://github.com/ErickrU/calculadora-varillas-pwa). Este repositorio no registra ni afirma que exista un despliegue AWS activo. Incluye infraestructura genérica para crear una instancia nueva; consulta la [plantilla de estado](docs/DEPLOYMENT-STATUS.md) y la [guía segura de AWS](docs/AWS-DEPLOYMENT.md).
 
 `"private": true` en `package.json` solo evita una publicación accidental en npm; no controla la visibilidad del repositorio en GitHub.
 
@@ -19,8 +19,9 @@ El código público vive en [`ErickrU/calculadora-varillas-pwa`](https://github.
 - diagrama SVG de la sección a escala y tabla de alternativas;
 - validación accesible asociada a cada campo;
 - diseño adaptable para celular y escritorio, con tema oscuro o claro persistente;
-- barra accesible con cinco controles: instalar, compartir, cambiar tema, restablecer y abrir ayuda;
+- barra accesible con exactamente cinco controles: instalar, compartir, cambiar tema, restablecer y abrir ayuda;
 - integración con Window Controls Overlay al instalarla y cabecera completa de respaldo en pestañas y navegadores sin esa API;
+- Web Share API con fallback de portapapeles que siempre usa la URL actual;
 - instalable y completamente funcional sin conexión después de la primera visita;
 - cálculo local: no envía ni almacena los datos del formulario;
 - despliegue reproducible en AWS con S3 privado, CloudFront y OAC.
@@ -35,7 +36,7 @@ cd calculadora-varillas-pwa
 npm start
 ```
 
-Abre [http://localhost:8080](http://localhost:8080). Los service workers requieren `localhost` o HTTPS; no abras `index.html` directamente con `file://`.
+Abre [http://127.0.0.1:8080](http://127.0.0.1:8080). El servidor escucha únicamente en loopback. Los service workers requieren un contexto seguro; no abras `index.html` directamente con `file://`.
 
 ## Datos solicitados
 
@@ -88,25 +89,21 @@ flowchart LR
 
 ```text
 calculadora-varillas-pwa/
-├── .github/                 Plantillas del repositorio
-├── docs/
-│   ├── ARCHITECTURE.md      Componentes y decisiones
-│   ├── AWS-DEPLOYMENT.md    Despliegue, verificación y operación
-│   ├── DEPLOYMENT-STATUS.md Plantilla para estado local no versionado
-│   └── CALCULATIONS.md      Fórmulas, unidades y limitaciones
+├── .github/workflows/pages.yml Artefacto público exacto de GitHub Pages
+├── docs/                       Cálculos, arquitectura y despliegue
 ├── infra/
-│   └── cloudformation.yaml  S3 privado + CloudFront OAC
+│   ├── cloudformation.yaml     S3 privado + CloudFront OAC
+│   └── stack-policy.json       Denegación fail-closed de updates
 ├── scripts/
-│   ├── deploy-aws.sh        Revisión y despliegue con confirmaciones
-│   ├── destroy-aws.sh       Elimina un stack verificado; no purga el bucket retenido
-│   └── verify-site.sh       Smoke test HTTPS sin credenciales
+│   ├── deploy-aws.sh           Revisión y creación separada en dos fases
+│   └── verify-site.sh          Smoke test HTTPS sin credenciales
 ├── css/estilos.css
 ├── js/
-│   ├── calculo.js           Motor de cálculo sin DOM
-│   ├── app.js               Interfaz y diagrama SVG
-│   └── registro-sw.js       Instalación, actualización y conexión
-├── iconos/                  Fuentes SVG y PNG para la PWA
-├── herramientas/            Servidor local y generador de iconos
+│   ├── calculo.js              Motor de cálculo sin DOM
+│   ├── app.js                  Interfaz y diagrama SVG
+│   └── registro-sw.js          Instalación, actualización y capacidades PWA
+├── iconos/
+├── herramientas/               Servidor local y generador de iconos
 ├── index.html
 ├── offline.html
 ├── manifest.webmanifest
@@ -115,8 +112,8 @@ calculadora-varillas-pwa/
 
 ## PWA y actualizaciones
 
-- El manifest declara iconos `any` y `maskable` y modo `standalone`.
-- El service worker precachea los archivos necesarios para calcular sin red.
+- El manifest declara iconos `any` y `maskable`, modo `standalone` y Window Controls Overlay.
+- El service worker precachea los 13 archivos publicables necesarios para calcular sin red.
 - Al cambiar el app shell, incrementa `VERSION` en `sw.js`; la interfaz avisará cuando la actualización esté lista.
 - Los datos de entrada nunca abandonan el dispositivo.
 
@@ -128,19 +125,22 @@ npm run iconos
 
 ## AWS
 
-La infraestructura usa CloudFormation. Prefiere credenciales temporales obtenidas mediante SSO o un rol de mínimo privilegio. Revisa siempre la identidad y cuenta activas antes de aplicar cambios; evita credenciales administrativas para el uso habitual. `--profile <YOUR_AWS_PROFILE>` es opcional: si se omite, AWS CLI usa su cadena estándar de credenciales.
+La infraestructura usa CloudFormation y está limitada a crear una instancia nueva. Prefiere credenciales temporales de mínimo privilegio y revisa la identidad activa por un canal local seguro. No uses credenciales administrativas para el uso habitual.
 
-Primero ejecuta únicamente el modo de revisión, sin `--apply`:
+Primero valida sin escribir:
 
 ```bash
 ./scripts/deploy-aws.sh \
+  --phase review \
   --profile <YOUR_AWS_PROFILE> \
   --region <YOUR_AWS_REGION> \
-  --stack <YOUR_STACK_NAME> \
-  --environment <YOUR_ENVIRONMENT>
+  --stack <YOUR_NEW_STACK_NAME> \
+  --environment prod
 ```
 
-No guardes credenciales en el repositorio ni versiones `.aws-deployment.json`, outputs, nombres físicos o estado local. El modo de escritura exige confirmar la cuenta y el hash exacto de la plantilla. Lee [docs/AWS-DEPLOYMENT.md](docs/AWS-DEPLOYMENT.md) antes de usarlo.
+`--profile` es opcional. Después de revisar cuenta, región y SHA, `--phase prepare` crea únicamente un change set `CREATE` y lo deja sin ejecutar; una invocación separada con `--phase execute` vuelve a validarlo antes de crear los cinco recursos. En `prod`, el flujo activa y verifica termination protection antes de cargar los 13 archivos públicos. No existe una ruta de actualización, eliminación o limpieza.
+
+No guardes credenciales en el repositorio ni versiones `.aws-change-set.json`, `.aws-deployment.json`, outputs, nombres físicos o estado local. Lee [docs/AWS-DEPLOYMENT.md](docs/AWS-DEPLOYMENT.md) antes de cualquier escritura.
 
 ## Licencia
 

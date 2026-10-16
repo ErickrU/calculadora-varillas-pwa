@@ -12,7 +12,7 @@
    Sube VERSION para invalidar los caches viejos en el siguiente despliegue.
    ========================================================================== */
 
-const VERSION = 'v3';
+const VERSION = 'v4';
 const CACHE_SHELL = `calculadora-varillas-shell-${VERSION}`;
 
 /** App shell: lo mínimo para que la app abra y calcule sin red. */
@@ -21,6 +21,7 @@ const PRECACHE = [
   './index.html',
   './offline.html',
   './manifest.webmanifest',
+  './sw.js',
   './css/estilos.css',
   './js/app.js',
   './js/calculo.js',

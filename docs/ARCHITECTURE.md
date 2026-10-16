@@ -1,131 +1,73 @@
 # Arquitectura
 
-## 1. Objetivo
+## 1. Aplicación
 
-Calculadora de Varillas es una PWA estática para estimar el refuerzo longitudinal de columnas de concreto armado. Debe funcionar en navegadores modernos, instalarse como aplicación y conservar todas sus funciones sin conexión después de la primera visita.
-
-No requiere backend: los datos ingresados se procesan localmente y no se almacenan ni transmiten.
-
-## 2. Arquitectura de la aplicación
+Calculadora de Varillas es una PWA estática para estimar el refuerzo longitudinal de columnas de concreto armado. Los datos se procesan localmente; no hay backend, almacenamiento remoto ni telemetría.
 
 ```mermaid
 flowchart LR
     U[Usuario] --> F[Formulario HTML accesible]
     F --> UI[js/app.js]
-    UI --> C[js/calculo.js\nLógica pura]
+    UI --> C[js/calculo.js]
     C --> R[Resultado + verificaciones]
-    R --> D[Diagrama SVG a escala]
-    SW[Service worker] --> CACHE[Cache Storage\napp shell]
+    R --> D[Diagrama SVG]
+    SW[Service worker] --> CACHE[Cache Storage]
     CACHE --> F
     CACHE --> UI
     CACHE --> C
 ```
-
-### Componentes
 
 | Componente | Responsabilidad |
 |---|---|
 | `index.html` | Estructura semántica, datos solicitados y panel de resultados |
 | `js/calculo.js` | Validación, fórmulas, distribución y alternativas; no usa DOM |
 | `js/app.js` | Adaptador entre formulario, motor de cálculo y presentación |
-| `js/registro-sw.js` | Instalación, compartir, tema, ayuda, Window Controls Overlay, conexión y actualización de la PWA |
-| `sw.js` | Precache del app shell y estrategias de respuesta offline |
-| `manifest.webmanifest` | Nombre, colores, iconos y comportamiento instalable con WCO y `standalone` |
-| `css/estilos.css` | Temas, diseño adaptable, barra WCO, estados, foco visible y página offline |
+| `js/registro-sw.js` | Instalación, Compartir, tema, ayuda, WCO, conexión y actualización |
+| `sw.js` | Precache de los 13 archivos públicos y estrategias offline |
+| `manifest.webmanifest` | Nombre, iconos, `standalone` y Window Controls Overlay |
+| `css/estilos.css` | Temas, diseño adaptable, zonas WCO, foco y página offline |
 
-La separación del motor (`calculo.js`) permite verificar las fórmulas sin un navegador y evita que la presentación altere el resultado numérico. La cabecera ofrece exactamente cinco controles accesibles: instalar, compartir, tema, restablecer y ayuda. El restablecimiento invoca el evento nativo del formulario para reutilizar la limpieza implementada por `app.js`.
+La cabecera conserva exactamente cinco controles accesibles: instalar, compartir, tema, restablecer y ayuda. Compartir usa Web Share cuando está disponible; Clipboard API y `execCommand('copy')` son fallbacks y todos usan `window.location.href`. El feedback se publica en una región `status` viva.
 
-Cuando la PWA instalada expone `navigator.windowControlsOverlay`, la cabecera usa las cuatro variables `titlebar-area-*`, zonas `drag`/`no-drag` y sincronización de `geometrychange` con 200 ms de espera. Si el rectángulo es angosto, la cabecera pasa a una fila inferior para no solapar los controles del sistema. Una pestaña normal o un navegador sin la API conserva la misma barra como cabecera web.
+Cuando la PWA instalada expone `navigator.windowControlsOverlay`, la cabecera usa las variables `titlebar-area-*`, zonas `drag`/`no-drag` y `geometrychange`. En una pestaña normal o sin esa API, la misma barra funciona como cabecera web.
 
-## 3. Flujo de cálculo
+## 2. Cálculo y ciclo PWA
 
 1. El formulario solicita geometría, materiales, método y varilla.
-2. `app.js` normaliza los datos y llama a `calcularColumna`.
-3. `calculo.js` valida rangos, calcula `Ag`, determina `As`, redondea el número de barras y comprueba la separación.
-4. Si la entrada no es válida, la interfaz enlaza cada mensaje con su control y mueve el foco al primer error.
-5. Si es válida, la interfaz presenta la propuesta, observaciones, alternativas y un SVG generado a la misma escala de la sección.
+2. `app.js` normaliza la entrada y llama a `calcularColumna`.
+3. `calculo.js` valida rangos, calcula `Ag`/`As`, redondea barras y comprueba separación.
+4. La interfaz enlaza errores con sus controles o muestra propuesta, observaciones, alternativas y SVG.
+5. `sw.js` precachea el app shell; `VERSION` separa caches y la interfaz ofrece activar una actualización instalada.
 
 Las fórmulas, unidades y limitaciones están en [`CALCULATIONS.md`](CALCULATIONS.md).
 
-## 4. Ciclo de vida PWA
-
-```mermaid
-sequenceDiagram
-    participant B as Navegador
-    participant W as Service worker
-    participant N as Red
-    participant C as Cache Storage
-    B->>N: Primera navegación
-    N-->>B: index.html
-    B->>W: register(sw.js)
-    W->>N: Descarga app shell
-    W->>C: Precache
-    Note over B,C: Visitas posteriores
-    B->>W: Navegación o recurso
-    W->>N: Intenta obtener versión fresca
-    alt Red disponible
-      N-->>W: Respuesta
-      W->>C: Actualiza caché
-      W-->>B: Respuesta
-    else Sin conexión
-      C-->>W: Última copia
-      W-->>B: Aplicación funcional
-    end
-```
-
-`VERSION` en `sw.js` identifica el cache del shell. Al incrementarla, el nuevo worker instala recursos y la interfaz ofrece actualizar; los caches antiguos se eliminan durante `activate`.
-
-## 5. Arquitectura AWS
+## 3. AWS
 
 ```mermaid
 flowchart LR
-    U[Cliente web / PWA] -->|HTTPS| CF[Amazon CloudFront\nCDN global]
-    CF -->|OAC + SigV4| S3[(Amazon S3\nbucket privado)]
-    CF --> H[Política de cabeceras\nde seguridad]
+    U[Cliente público] -->|HTTPS| CF[CloudFront]
+    CF -->|OAC + SigV4| S3[(S3 privado)]
+    CF --> H[Response Headers Policy]
     IAC[CloudFormation] --> CF
     IAC --> S3
-    CLI[Script de despliegue] --> IAC
-    CLI --> S3
-    CLI --> INV[Invalidación CloudFront]
 ```
 
-### Recursos y límites de confianza
+La plantilla contiene exactamente cinco recursos: bucket, bucket policy, OAC, distribución y política de cabeceras.
 
-- **S3** es almacenamiento de origen, no endpoint público de sitio web. Block Public Access permanece activo.
-- **CloudFront** es el único punto público. OAC firma las solicitudes a S3 y la política del bucket limita lectura al ARN de esa distribución.
-- **CloudFormation** crea recursos de forma reproducible; no contiene credenciales.
-- **El navegador** recibe solo archivos estáticos. No existen APIs ni datos personales del lado servidor.
+- **S3** usa endpoint REST, cuatro Block Public Access, `BucketOwnerEnforced`, SSE-S3 y versionado. No hay website endpoint, CORS ni ACL pública.
+- **CloudFront** es el único endpoint público, redirige HTTP a HTTPS y permite solo `GET`/`HEAD`. No define alias, dominio personalizado, WAF ni logs.
+- **OAC** firma siempre con SigV4. La política S3 concede únicamente `s3:GetObject` al servicio CloudFront condicionado al ARN de su distribución y deniega transporte inseguro.
+- **Cabeceras**: CSP `self` sin inline/eval, `DENY`, `nosniff`, HSTS `max-age=47304000` sin subdominios ni preload, Referrer Policy y permisos same-origin solo para compartir/escribir al portapapeles. Se omite `X-XSS-Protection`.
 
-### Decisiones
+## 4. Protección operativa
 
-1. **OAC en lugar de OAI**: OAC es el mecanismo actual y usa credenciales SigV4 de corta duración.
-2. **S3 privado en lugar de website endpoint**: evita publicar el bucket y permite HTTPS entre CloudFront y S3.
-3. **Nombre de bucket generado por CloudFormation**: evita colisiones globales y no filtra identificadores del usuario.
-4. **SSE-S3 explícito**: los objetos quedan cifrados sin introducir una clave KMS ni su costo/operación para un sitio público sin datos sensibles.
-5. **Versionado y `DeletionPolicy: Retain`**: protege contra sobrescritura y borrado accidental; la limpieza debe ser una decisión separada.
-6. **Cifrado de transporte**: el comportamiento predeterminado redirige HTTP a HTTPS. Con el dominio `cloudfront.net`, AWS fija la política TLS del certificado administrado; para controlar una versión mínima se necesita dominio propio y certificado ACM.
-7. **Sin dominio personalizado inicialmente**: la URL `cloudfront.net` ya usa HTTPS; agregar dominio requiere control DNS y un certificado ACM en `us-east-1`.
-8. **Sin registro detallado por defecto**: reduce datos y costo en un proyecto académico. Para producción, evalúa CloudFront standard logging, retención, acceso y presupuesto antes de activarlo.
+`DeletionPolicy: RetainExceptOnCreate` evita dejar un bucket si falla la creación inicial, pero lo retiene después de una creación correcta. `UpdateReplacePolicy: Retain` evita pérdida por reemplazo. Además, la stack policy deniega `Update:*` para todos los recursos y una creación `prod` activa termination protection antes del primer upload.
 
-## 6. Seguridad y privacidad
+`deploy-aws.sh` no actualiza stacks. `review` solo valida; `prepare` crea un change set `CREATE` sin ejecutarlo; `execute` vuelve a inspeccionar ese mismo change set y exige cinco adiciones antes de ejecutarlo. Después verifica origen vacío, protecciones, privacidad, OAC, HTTPS y cabeceras; solo entonces carga la allowlist de 13 archivos e invalida su propia distribución.
 
-La política de respuesta establece CSP sin scripts remotos ni inline, HSTS, `X-Content-Type-Options`, `Frame-Options`, `Referrer-Policy` y `Permissions-Policy`. La página offline debe respetar la misma CSP.
+## 5. Límites y riesgos
 
-Amenazas consideradas:
-
-| Riesgo | Control |
-|---|---|
-| Acceso directo o listado del bucket | Block Public Access + política exclusiva para OAC |
-| Tráfico sin cifrar | HTTP→HTTPS en CloudFront y OAC con firma permanente; dominio propio + ACM si se debe fijar una versión TLS mínima |
-| Eliminación accidental | Versionado + retención de CloudFormation |
-| Publicación de archivos internos | El script carga una allowlist explícita de archivos de la app |
-| Código remoto comprometido | Sin dependencias ni CDN de terceros; CSP `self` |
-| Despliegue en cuenta equivocada | Comprobación de cuenta y confirmación explícita en el script |
-| Resultados de cálculo enviados fuera | Cálculo 100 % local, sin red ni telemetría |
-
-## 7. Restricciones
-
-- No modela interacción P–M, esbeltez, segundo orden, cortante, confinamiento sísmico completo ni cimentación.
-- No hay sincronización entre dispositivos.
-- No hay observabilidad de negocio porque no hay backend.
-- El URL de CloudFront puede tardar varios minutos en estar disponible o actualizarse.
+- El dominio predeterminado `cloudfront.net` usa certificado y política TLS administrados por AWS; fijar una versión mínima requiere dominio propio y ACM, fuera de alcance.
+- No hay logs de acceso por decisión de alcance y privacidad.
+- El bucket versionado retenido puede acumular costos.
+- No se modelan interacción P–M, esbeltez, segundo orden, cortante, confinamiento sísmico completo ni cimentación.

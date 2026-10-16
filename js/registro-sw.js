@@ -122,27 +122,37 @@ window.addEventListener('appinstalled', () => {
 /* ================================================================
    3. Compartir, tema, restablecer y ayuda
    ================================================================ */
-async function copiarEnlace() {
-  if (navigator.clipboard?.writeText) {
-    await navigator.clipboard.writeText(window.location.href);
-    return;
-  }
-
+function copiarConComando(enlace) {
   const campo = document.createElement('textarea');
-  campo.value = window.location.href;
+  campo.value = enlace;
+  campo.className = 'campo-copia-portapapeles';
   campo.setAttribute('readonly', '');
-  campo.style.position = 'fixed';
-  campo.style.opacity = '0';
+  campo.setAttribute('aria-hidden', 'true');
   document.body.append(campo);
   campo.select();
+  campo.setSelectionRange(0, campo.value.length);
   const copiado = document.execCommand('copy');
   campo.remove();
   if (!copiado) throw new Error('No se pudo copiar el enlace');
 }
 
+async function copiarEnlace() {
+  const enlace = window.location.href;
+  if (navigator.clipboard?.writeText) {
+    try {
+      await navigator.clipboard.writeText(enlace);
+      return;
+    } catch {
+      // Continúa con el fallback compatible con navegadores anteriores.
+    }
+  }
+
+  copiarConComando(enlace);
+}
+
 btnCompartir?.addEventListener('click', async () => {
   try {
-    if (navigator.share) {
+    if (typeof navigator.share === 'function') {
       await navigator.share({
         title: document.title,
         text: 'Calcula el refuerzo longitudinal de columnas de concreto armado.',
@@ -154,7 +164,10 @@ btnCompartir?.addEventListener('click', async () => {
       anunciar('Enlace copiado al portapapeles.');
     }
   } catch (error) {
-    if (error.name === 'AbortError') return;
+    if (error.name === 'AbortError') {
+      anunciar('Se canceló la acción de compartir.');
+      return;
+    }
     try {
       await copiarEnlace();
       anunciar('Enlace copiado al portapapeles.');

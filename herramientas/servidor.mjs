@@ -84,7 +84,7 @@ const servidor = createServer(async (req, res) => {
   }
 });
 
-servidor.listen(PUERTO, () => {
-  console.log(`Calculadora de Varillas → http://localhost:${PUERTO}/`);
+servidor.listen(PUERTO, '127.0.0.1', () => {
+  console.log(`Calculadora de Varillas → http://127.0.0.1:${PUERTO}/`);
   console.log(`Sirviendo ${RAIZ}  (Ctrl+C para detener)`);
 });
