@@ -549,7 +549,7 @@ test('build y validate completan un intento sintético con identidad persistida'
     ]);
     assert.equal(sealedExecute.status, 0, sealedExecute.stderr);
 
-    const guardExecuteArguments = (output) => [
+    const guardExecuteArguments = (output, requestedAt = at(30)) => [
       'guard-execute',
       '--phase', 'execute',
       '--evidence', executeEvidencePath,
@@ -566,7 +566,7 @@ test('build y validate completan un intento sintético con identidad persistida'
       '--expected-region', identity.region,
       '--expected-commit-sha', 'a'.repeat(40),
       '--expected-identity-sha', identityHash,
-      '--requested-at', at(30),
+      '--requested-at', requestedAt,
       '--output', output
     ];
     const originalExecuteEvidence = readFileSync(executeEvidencePath);
@@ -587,9 +587,53 @@ test('build y validate completan un intento sintético con identidad persistida'
     assert.equal(guarded.execution.changeSetId, changeSetId);
     assert.equal(guarded.execution.clientToken, attempt.clientToken);
     assert.equal(guarded.reviewedChainSha256, sha256(readFileSync(executeReviewedChain)));
+
+    writePrivateJson(executeEvidencePath, changedExecuteEvidence);
+    const changedAtLaunch = runCli(guardExecuteArguments(
+      join(attemptDirectory, 'execute-launch-changed-proof.json'),
+      at(31)
+    ));
+    assert.notEqual(changedAtLaunch.status, 0);
+    assert.match(changedAtLaunch.stderr, /EVIDENCE_CHAIN/);
+    writePrivate(executeEvidencePath, originalExecuteEvidence);
+
+    const launchGuardPath = join(attemptDirectory, 'execute-launch-guard.json');
+    const launchGuard = runCli(guardExecuteArguments(launchGuardPath, at(31)));
+    assert.equal(launchGuard.status, 0, launchGuard.stderr);
+    assert.equal(mode(launchGuardPath), 0o600);
+    assert.equal(JSON.parse(readFileSync(launchGuardPath, 'utf8')).requestedAt, at(31));
+
+    const delayedLaunch = runCli(guardExecuteArguments(
+      join(attemptDirectory, 'execute-launch-stale.json'),
+      at(321)
+    ));
+    assert.notEqual(delayedLaunch.status, 0);
+    assert.match(delayedLaunch.stderr, /TIMESTAMP_STALE/);
   } finally {
     rmSync(temporary, { recursive: true, force: true });
   }
+});
+
+test('renueva el reloj y revalida inmediatamente antes de crear el proceso AWS', () => {
+  const firstTimestamp = script.indexOf('EXECUTE_REQUESTED_AT="$(utc_now)"');
+  const firstGuard = script.indexOf('node "$VALIDATOR" guard-execute', firstTimestamp);
+  const tokenBinding = script.indexOf('CLIENT_TOKEN="$(jq -er', firstGuard);
+  const renewedTimestamp = script.indexOf('EXECUTE_REQUESTED_AT="$(utc_now)"', firstTimestamp + 1);
+  const launchGuard = script.indexOf('node "$VALIDATOR" guard-execute', renewedTimestamp);
+  const capture = script.indexOf('capture_command_at execute-change-set "$EXECUTE_REQUESTED_AT"', launchGuard);
+  const verify = script.indexOf('node "$VALIDATOR" verify-execute-capture', capture);
+
+  assert.ok(firstTimestamp >= 0 && firstTimestamp < firstGuard);
+  assert.ok(firstGuard < tokenBinding && tokenBinding < renewedTimestamp);
+  assert.ok(renewedTimestamp < launchGuard && launchGuard < capture && capture < verify);
+  const launchBlock = script.slice(launchGuard, capture);
+  assert.match(launchBlock, /--requested-at "\$EXECUTE_REQUESTED_AT"/);
+  assert.match(launchBlock, /--output "\$ATTEMPT_DIR\/execute-launch-guard\.json"/);
+  assert.doesNotMatch(launchBlock, /\bjq\b/);
+  assert.match(
+    script.slice(verify, script.indexOf("require_capture_success 'CloudFormation no aceptó", verify)),
+    /--guard "\$ATTEMPT_DIR\/execute-launch-guard\.json"/
+  );
 });
 
 test('los reportes compartibles admiten únicamente hashes y booleanos', () => {
