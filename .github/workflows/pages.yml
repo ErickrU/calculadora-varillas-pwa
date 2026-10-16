@@ -26,15 +26,7 @@ jobs:
         with:
           persist-credentials: false
       - name: Validar aplicación
-        shell: bash
-        run: |
-          set -euo pipefail
-          node --check js/calculo.js
-          node --check js/app.js
-          node --check js/registro-sw.js
-          node --check sw.js
-          node --check herramientas/servidor.mjs
-          node -e "JSON.parse(require('node:fs').readFileSync('manifest.webmanifest', 'utf8'))"
+        run: npm run check && npm test
       - name: Configurar Pages
         uses: actions/configure-pages@v5.0.0
       - name: Preparar artefacto público exacto

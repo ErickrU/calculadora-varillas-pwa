@@ -10,6 +10,8 @@
   "scripts": {
     "start": "node herramientas/servidor.mjs",
     "dev": "node herramientas/servidor.mjs --puerto 8080",
+    "check": "node --check js/calculo.js && node --check js/app.js && node --check js/registro-sw.js && node --check sw.js && node --check herramientas/servidor.mjs && node --check scripts/aws-proof.mjs && node --check scripts/validate-aws-proof.mjs && node -e \"JSON.parse(require('node:fs').readFileSync('manifest.webmanifest', 'utf8'))\"",
+    "test": "node --test",
     "iconos": "bash herramientas/generar-iconos.sh"
   },
   "keywords": ["pwa", "service-worker", "concreto-armado", "columnas", "varillas", "e060", "utec"],

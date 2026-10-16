@@ -19,47 +19,32 @@ Abre `http://127.0.0.1:8080/`. El servidor escucha solo en loopback; la aplicaci
 1. Crea una rama desde `main` (`feature/...`, `fix/...` o `docs/...`).
 2. Haz un cambio enfocado; evita mezclar fórmulas, interfaz e infraestructura sin necesidad.
 3. Si cambias `js/calculo.js`, documenta la ecuación, unidades, hipótesis y referencia normativa.
-4. Si cambias archivos incluidos en el app shell, incrementa `VERSION` en `sw.js` para que las instalaciones existentes reciban la actualización.
-5. Ejecuta las verificaciones indicadas abajo.
-6. Abre un pull request describiendo el problema, la solución y los casos comprobados.
+4. Si cambias archivos incluidos en el app shell, incrementa `VERSION` en `sw.js`.
+5. Ejecuta las verificaciones locales.
+6. Abre un pull request con el problema, la solución y los casos comprobados.
 
-## Verificación mínima
+## Verificación local
 
 ```bash
-node --check js/calculo.js
-node --check js/app.js
-node --check js/registro-sw.js
-node --check sw.js
-node --check herramientas/servidor.mjs
-node -e "JSON.parse(require('node:fs').readFileSync('manifest.webmanifest', 'utf8'))"
-bash -n scripts/deploy-aws.sh
-bash -n scripts/verify-site.sh
+npm run check
+npm test
+bash -n scripts/deploy-aws.sh scripts/verify-site.sh
 shellcheck scripts/deploy-aws.sh scripts/verify-site.sh
 ```
 
-Después, prueba en el navegador:
+La suite comprueba el caso rectangular `30 × 50 cm`, cuantía `1 %`, barra `5/8"`: `ok=true`, 8 barras, `As` requerido de `15 cm²` y colocado de `16 cm²`. También exige exactamente cinco controles, un solo Compartir, Web Share, Clipboard API, `execCommand('copy')`, URL actual, feedback accesible y Window Controls Overlay.
 
-- columna rectangular, circular y circular con espiral;
-- método por cuantía y por carga axial;
-- errores por dato vacío, cuantía fuera de 1 %–6 % y sección insuficiente;
-- presentación en móvil y escritorio;
-- exactamente cinco controles de la barra y un solo «Compartir»;
-- Web Share, Clipboard API y fallback de copia con la URL actual y feedback accesible;
-- recarga sin conexión después de una primera visita;
-- actualización del service worker si cambiaste el app shell.
+Después, prueba en el navegador geometrías y métodos distintos, validaciones, presentación adaptable, teclado, instalación, uso offline y actualización del service worker cuando corresponda.
 
-Para infraestructura, ejecuta únicamente la fase de revisión:
+## Infraestructura
 
-```bash
-./scripts/deploy-aws.sh \
-  --phase review \
-  --profile <YOUR_AWS_PROFILE> \
-  --region <YOUR_AWS_REGION> \
-  --stack <YOUR_NEW_STACK_NAME> \
-  --environment <YOUR_ENVIRONMENT>
-```
+Este workflow no hizo llamadas AWS. Las pruebas AWS usan únicamente módulos puros y fixtures sintéticos; no ejecutes `scripts/deploy-aws.sh` para validar un cambio de código.
 
-`--profile` es opcional. Usa SSO o credenciales temporales de mínimo privilegio, comprueba la identidad activa y no uses credenciales administrativas como opción habitual. La escritura se divide en `prepare` y `execute`, admite únicamente un change set `CREATE` y requiere confirmaciones exactas. No publiques credenciales, identificadores de cuenta, ARN, nombres físicos, archivos `.env`, `.aws-change-set.json`, `.aws-deployment.json` ni outputs.
+El intento `calculadora-varillas-pwa-public-prod` está bloqueado y debe permanecer intacto. El único target futuro del script es `calculadora-varillas-pwa-public-prod-v2`; si existe o la ausencia no puede corroborarse, se detiene sin update, cambio de nombre, delete ni cleanup. El invocador no controla stack, entorno, price class, nombre de change set o client token.
+
+Una operación futura autorizada exige profile y región explícitos, commit e identidad aprobados, repositorio limpio, dos pruebas de ausencia, correlación CloudTrail, plantilla idéntica byte por byte, `CREATE`, `DO_NOTHING`, exactamente cinco `Add` allowlisted y un guard TOCTOU fresco. `ChangeSetType` puede faltar en `DescribeChangeSet`; una contradicción sí debe fallar.
+
+La evidencia completa vive solo en `.aws-attempts/<attempt-id>/` (`0700`, archivos `0600`) y `.aws-change-set.json` (`0600`). Los reportes compartibles contienen únicamente hashes y booleanos. No publiques credenciales, cuentas, ARN, nombres físicos, tokens, archivos `.env`, estados ni outputs. Preparar, ejecutar y recuperar recursos parciales requieren autorizaciones trazables separadas.
 
 ## Estilo
 

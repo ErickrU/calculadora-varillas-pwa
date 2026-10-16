@@ -29,45 +29,48 @@ flowchart LR
 
 La cabecera conserva exactamente cinco controles accesibles: instalar, compartir, tema, restablecer y ayuda. Compartir usa Web Share cuando está disponible; Clipboard API y `execCommand('copy')` son fallbacks y todos usan `window.location.href`. El feedback se publica en una región `status` viva.
 
-Cuando la PWA instalada expone `navigator.windowControlsOverlay`, la cabecera usa las variables `titlebar-area-*`, zonas `drag`/`no-drag` y `geometrychange`. En una pestaña normal o sin esa API, la misma barra funciona como cabecera web.
+Cuando la PWA instalada expone `navigator.windowControlsOverlay`, la cabecera usa las variables `titlebar-area-*`, zonas `drag`/`no-drag` y `geometrychange`. Sin esa API, la misma barra funciona como cabecera web.
 
 ## 2. Cálculo y ciclo PWA
 
 1. El formulario solicita geometría, materiales, método y varilla.
 2. `app.js` normaliza la entrada y llama a `calcularColumna`.
 3. `calculo.js` valida rangos, calcula `Ag`/`As`, redondea barras y comprueba separación.
-4. La interfaz enlaza errores con sus controles o muestra propuesta, observaciones, alternativas y SVG.
+4. La interfaz presenta propuesta, observaciones, alternativas y SVG.
 5. `sw.js` precachea el app shell; `VERSION` separa caches y la interfaz ofrece activar una actualización instalada.
 
-Las fórmulas, unidades y limitaciones están en [`CALCULATIONS.md`](CALCULATIONS.md).
+Una regresión fija el caso rectangular `30 × 50 cm`, `fc=210`, `fy=4200`, cuantía `1 %`, barra `5/8"` y recubrimiento `4 cm`: 8 barras, `As=15 cm²` requerido y `16 cm²` colocado.
 
-## 3. AWS
+## 3. Alternativa AWS
 
 ```mermaid
 flowchart LR
     U[Cliente público] -->|HTTPS| CF[CloudFront]
     CF -->|OAC + SigV4| S3[(S3 privado)]
     CF --> H[Response Headers Policy]
-    IAC[CloudFormation] --> CF
+    IAC[CloudFormation CREATE] --> CF
     IAC --> S3
+    E[Evidencia privada] --> V[Validador local fail-closed]
 ```
 
-La plantilla contiene exactamente cinco recursos: bucket, bucket policy, OAC, distribución y política de cabeceras.
+CloudFront es público porque la PWA está destinada a acceso anónimo. S3 permanece privado con cuatro Block Public Access y solo concede `s3:GetObject` a CloudFront cuando `AWS:SourceArn` coincide con la distribución creada. Un `Deny` separado rechaza transporte inseguro.
 
-- **S3** usa endpoint REST, cuatro Block Public Access, `BucketOwnerEnforced`, SSE-S3 y versionado. No hay website endpoint, CORS ni ACL pública.
-- **CloudFront** es el único endpoint público, redirige HTTP a HTTPS y permite solo `GET`/`HEAD`. No define alias, dominio personalizado, WAF ni logs.
-- **OAC** firma siempre con SigV4. La política S3 concede únicamente `s3:GetObject` al servicio CloudFront condicionado al ARN de su distribución y deniega transporte inseguro.
-- **Cabeceras**: CSP `self` sin inline/eval, `DENY`, `nosniff`, HSTS `max-age=47304000` sin subdominios ni preload, Referrer Policy y permisos same-origin solo para compartir/escribir al portapapeles. Se omite `X-XSS-Protection`.
+La plantilla contiene exactamente cinco recursos: bucket, bucket policy, OAC, distribución y política de cabeceras. No configura website endpoint, acceso público S3, CORS, IAM, DNS, dominio propio, WAF, logs, macros, nested stacks, imports ni código de borde. El bucket usa SSE-S3, versionado, `BucketOwnerEnforced`, `DeletionPolicy: Retain` y `UpdateReplacePolicy: Retain`.
 
-## 4. Protección operativa
+## 4. Flujo trazable de creación
 
-`DeletionPolicy: Retain` conserva el bucket durante un rollback de la creación inicial y al eliminar la stack. `UpdateReplacePolicy: Retain` lo conserva ante un reemplazo. Además, la stack policy deniega `Update:*` para todos los recursos y una creación `prod` activa termination protection antes del primer upload. El almacenamiento retenido y sus versiones pueden seguir generando costos; no existe limpieza automática.
+`calculadora-varillas-pwa-public-prod` permanece bloqueado e intacto. El único target futuro es `calculadora-varillas-pwa-public-prod-v2`, con `prod` y `PriceClass_100` fijados internamente. Cualquier existencia o incertidumbre produce STOP; no hay update, delete, fallback de nombre ni cleanup.
 
-`deploy-aws.sh` no actualiza stacks. `review` solo valida; `prepare` crea un change set `CREATE` sin ejecutarlo; `execute` vuelve a inspeccionar ese mismo change set y exige cinco adiciones antes de ejecutarlo. Después verifica origen vacío, protecciones, privacidad, OAC, HTTPS y cabeceras; solo entonces carga la allowlist de 13 archivos e invalida su propia distribución.
+`prepare` genera internamente attempt ID, nombre y client token, persiste identidad antes de crear y conserva evidencia privada `0700/0600`. Dos probes de ausencia preceden al inicio capturado de `CreateChangeSet` por un máximo de 60 segundos; CloudTrail debe igualar el request ID exacto de `DescribeStacks`. La creación correlaciona éxito, identidad, región, tiempo, stack, nombre, token e ID. El template remoto debe coincidir byte por byte con la plantilla ASCII+LF y con el blob del commit.
 
-## 5. Límites y riesgos
+El validador deriva la semántica `CREATE` de todas las fuentes en conjunción. No depende de que `DescribeChangeSet` devuelva `ChangeSetType`, pero rechaza contradicciones. Exige `OnStackFailure=DO_NOTHING`, modo `STANDARD`, opciones fuera de alcance vacías, placeholder `REVIEW_IN_PROGRESS` sin template, parámetros, outputs o recursos aplicados, un único change set disponible y cinco `Add` allowlisted.
 
-- El dominio predeterminado `cloudfront.net` usa certificado y política TLS administrados por AWS; fijar una versión mínima requiere dominio propio y ACM, fuera de alcance.
-- No hay logs de acceso por decisión de alcance y privacidad.
-- El bucket versionado retenido puede acumular costos.
-- No se modelan interacción P–M, esbeltez, segundo orden, cortante, confinamiento sísmico completo ni cimentación.
+Antes de execute se repite la conjunción con un snapshot TOCTOU de máximo 300 segundos. Un guard inmediato liga puntero, intento sellado, evidencia, timestamp y token; la llamada consume los valores del guard. Los reportes compartibles solo contienen hashes y booleanos. Este workflow no hizo llamadas AWS.
+
+## 5. Protección operativa y riesgos
+
+Tras una creación autorizada, el script verifica stack policy, termination protection, S3 privado, cifrado, versionado, OAC, métodos, HTTPS, cabeceras y rechazo S3 directo antes de publicar la allowlist.
+
+`DeletionPolicy: Retain` conserva el bucket durante rollback de creación o eliminación del stack. `UpdateReplacePolicy: Retain` lo conserva ante un reemplazo autorizado por separado. `DO_NOTHING`, versionado y recursos parciales pueden mantener costos. No existe limpieza automática; preparación, ejecución y recuperación requieren autorizaciones separadas.
+
+El dominio predeterminado administrado por AWS, la ausencia de logs y las limitaciones de ingeniería estructural permanecen fuera del alcance de esta PWA académica.

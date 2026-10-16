@@ -1,50 +1,33 @@
 # Estado del despliegue AWS
 
-## Sin despliegue versionado
+## Sin despliegue afirmado
 
-Este repositorio público **no registra ni afirma que exista un despliegue AWS activo**. No se versionan URL de CloudFront, identificadores, fechas, commits desplegados, hashes de plantillas, cuentas, ARN, nombres de stack ni nombres físicos de buckets.
+Este repositorio no registra ni afirma un despliegue AWS activo. Este workflow no hizo llamadas AWS. No contiene cuentas, ARN, buckets físicos, IDs de distribución, tokens, outputs ni URL reales de recursos.
 
-Cada persona que cree una instancia debe mantener esos datos fuera de Git. `scripts/deploy-aws.sh` usa `.aws-change-set.json` entre las fases `prepare` y `execute`, y genera `.aws-deployment.json` solo al finalizar correctamente. Ambos archivos están ignorados y se protegen con modo `0600`.
+`calculadora-varillas-pwa-public-prod` es un intento bloqueado que permanece intacto y sobre el cual el script no realiza ninguna operación. El único target futuro propuesto es `calculadora-varillas-pwa-public-prod-v2`. Una fase `prepare` debe probar su ausencia mediante `DescribeStacks` **y** `ListChangeSets`, además de correlacionar CloudTrail. Si v2 existe o la prueba es incompleta, el resultado obligatorio es STOP; nunca update ni cambio automático de nombre.
 
-## Forma del estado local
+## Evidencia local esperada
 
-Los valores siguientes son marcadores, no recursos reales:
+Cada intento futuro conserva datos completos únicamente en `.aws-attempts/<attempt-id>/` (`0700`, archivos `0600`) y en `.aws-change-set.json` (`0600`). Incluye timestamps UTC, profile, región, identidad normalizada, target v2, nombre de change set, client token, request/respuesta, inicio real de cada captura, template y commit SHA, respuestas remotas y una cadena de hashes write-once. Los reportes compartibles contienen solo hashes y booleanos.
 
-```json
-{
-  "stack": "<YOUR_STACK_NAME>",
-  "stackId": "<YOUR_STACK_ARN>",
-  "region": "<YOUR_AWS_REGION>",
-  "environment": "<YOUR_ENVIRONMENT>",
-  "deploymentId": "<YOUR_DEPLOYMENT_ID>",
-  "templateSha256": "<YOUR_TEMPLATE_SHA256>",
-  "contentBucket": "<YOUR_PRIVATE_BUCKET_NAME>",
-  "distributionId": "<YOUR_CLOUDFRONT_DISTRIBUTION_ID>",
-  "siteUrl": "<YOUR_CLOUDFRONT_URL>",
-  "deployedAt": "<YOUR_DEPLOYMENT_TIME>"
-}
-```
+Un intento fallido queda intacto y bloquea reintentos automáticos. `DO_NOTHING`, `DeletionPolicy: Retain`, `UpdateReplacePolicy: Retain`, versionado y recursos parciales pueden conservar costos. No existe cleanup automático; la recuperación exige una autorización posterior separada.
 
-No copies estos valores a documentación versionada ni adjuntes los estados a issues.
+## Conjunción obligatoria antes de execute
 
-## Verificación posterior a una creación propia
+- commit limpio y template local idéntico al blob aprobado;
+- template ASCII con LF e igualdad byte por byte con `GetTemplate`;
+- identidad, profile y región iguales a sus hashes aprobados;
+- dos fuentes de ausencia cuyo fin queda a menos de 60 segundos del inicio capturado de `CreateChangeSet`, con request ID exacto de `DescribeStacks` corroborado por CloudTrail;
+- request `CREATE` revisado, descripción ligada al template, nombre/token internos, `OnStackFailure=DO_NOTHING` y opciones fuera de alcance vacías;
+- respuesta y evento `CreateChangeSet` correlacionados por éxito, identidad, región, tiempo, stack, nombre, token e ID;
+- placeholder `REVIEW_IN_PROGRESS` sin recursos, outputs ni template aplicado;
+- un único change set `CREATE_COMPLETE/AVAILABLE`, sin role, notificaciones, imports ni rollback triggers;
+- parámetros, tags, modo `STANDARD` y capabilities exactos;
+- exactamente cinco acciones `Add` allowlisted;
+- snapshot TOCTOU completo cuyas observaciones tienen antigüedad máxima de 300 segundos y se revalidan inmediatamente antes de `execute-change-set`.
 
-Comprueba y conserva en un sistema privado apropiado:
+`ChangeSetType` no es un campo obligatorio de `DescribeChangeSet`; su ausencia o valor nulo no invalida la prueba. Un valor contradictorio sí la invalida.
 
-- stack `CREATE_COMPLETE`, cinco recursos exactos y termination protection para `prod`;
-- stack policy que deniega todo update;
-- redirección HTTP→HTTPS y únicamente `GET`/`HEAD`;
-- S3 Block Public Access, Object Ownership, SSE-S3, versionado y policy no pública;
-- acceso al origen exclusivamente mediante OAC y `403` S3 directo;
-- CSP, HSTS sin subdominios, `nosniff`, `DENY`, Referrer y Permissions Policy, sin `X-XSS-Protection`;
-- 13 archivos exactos, manifest y service worker activos;
-- cinco controles, un Compartir domain-agnostic y funcionamiento offline;
-- cálculo de 8 barras para 30 × 50 cm, 1 % y 5/8".
+## Estado público
 
-## Flujo permitido
-
-1. `--phase review`: solo lectura y validación.
-2. `--phase prepare`: crea un change set `CREATE` y no lo ejecuta.
-3. `--phase execute`: revalida ese change set, crea la stack, aplica protecciones y publica.
-
-No hay fases para actualizar, reemplazar, destruir o limpiar. Una operación posterior exige un proceso independiente y aprobación explícita, especialmente en producción. El bucket retenido y sus versiones pueden seguir generando costos.
+GitHub Pages publica solo el artefacto `_site` de 13 archivos. Infraestructura, scripts, pruebas, documentación y evidencia privada no forman parte del sitio. La PWA conserva exactamente cinco controles, un Compartir y el caso funcional de 8 barras, `15 cm²` requeridos y `16 cm²` colocados.

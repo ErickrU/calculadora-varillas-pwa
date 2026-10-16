@@ -6,7 +6,7 @@ PWA sin dependencias que calcula **cuántas varillas longitudinales necesita una
 
 ## Repositorio público
 
-El código público vive en [`ErickrU/calculadora-varillas-pwa`](https://github.com/ErickrU/calculadora-varillas-pwa). Este repositorio no registra ni afirma que exista un despliegue AWS activo. Incluye infraestructura genérica para crear una instancia nueva; consulta la [plantilla de estado](docs/DEPLOYMENT-STATUS.md) y la [guía segura de AWS](docs/AWS-DEPLOYMENT.md).
+El código público vive en [`ErickrU/calculadora-varillas-pwa`](https://github.com/ErickrU/calculadora-varillas-pwa). Este repositorio no registra ni afirma que exista un despliegue AWS activo. Incluye infraestructura genérica para proponer una creación nueva; consulta la [plantilla de estado](docs/DEPLOYMENT-STATUS.md) y la [guía segura de AWS](docs/AWS-DEPLOYMENT.md).
 
 `"private": true` en `package.json` solo evita una publicación accidental en npm; no controla la visibilidad del repositorio en GitHub.
 
@@ -21,10 +21,10 @@ El código público vive en [`ErickrU/calculadora-varillas-pwa`](https://github.
 - diseño adaptable para celular y escritorio, con tema oscuro o claro persistente;
 - barra accesible con exactamente cinco controles: instalar, compartir, cambiar tema, restablecer y abrir ayuda;
 - integración con Window Controls Overlay al instalarla y cabecera completa de respaldo en pestañas y navegadores sin esa API;
-- Web Share API con fallback de portapapeles que siempre usa la URL actual;
+- Web Share API con Clipboard API y `execCommand('copy')` como fallbacks, siempre con la URL actual;
 - instalable y completamente funcional sin conexión después de la primera visita;
 - cálculo local: no envía ni almacena los datos del formulario;
-- despliegue reproducible en AWS con S3 privado, CloudFront y OAC.
+- alternativa AWS con S3 privado, CloudFront y OAC.
 
 ## Inicio rápido
 
@@ -33,6 +33,8 @@ Requiere Node.js 20 o posterior solo para el servidor local. La aplicación no i
 ```bash
 git clone https://github.com/ErickrU/calculadora-varillas-pwa.git
 cd calculadora-varillas-pwa
+npm run check
+npm test
 npm start
 ```
 
@@ -61,13 +63,13 @@ As colocado   = 16.00 cm²
 Distribución  = 3 barras por cada cara b y 3 por cada cara h
 ```
 
-Las cuatro barras de esquina pertenecen a dos caras; no se suman dos veces.
+Las cuatro barras de esquina pertenecen a dos caras; no se suman dos veces. Este caso está protegido por una prueba de regresión.
 
 ## Documentación
 
 - [Cálculos, unidades, ecuaciones y limitaciones](docs/CALCULATIONS.md)
 - [Arquitectura de la PWA y de AWS](docs/ARCHITECTURE.md)
-- [Plantilla de estado local de despliegue](docs/DEPLOYMENT-STATUS.md)
+- [Estado local de despliegue](docs/DEPLOYMENT-STATUS.md)
 - [Despliegue y operación segura en AWS](docs/AWS-DEPLOYMENT.md)
 - [Guía para contribuir](CONTRIBUTING.md)
 - [Política de seguridad](SECURITY.md)
@@ -83,7 +85,7 @@ flowchart LR
     P -. primera carga opcional .-> CF
 ```
 
-`js/calculo.js` contiene la lógica pura; `js/app.js` adapta el formulario y genera el resultado/diagrama; `sw.js` conserva el app shell para uso offline. En un despliegue AWS propio, CloudFront es el único endpoint público y lee S3 mediante Origin Access Control.
+`js/calculo.js` contiene la lógica pura; `js/app.js` adapta el formulario y genera el resultado/diagrama; `sw.js` conserva el app shell para uso offline. En una creación AWS propia, CloudFront es el único endpoint público y lee S3 mediante Origin Access Control.
 
 ## Estructura
 
@@ -95,8 +97,11 @@ calculadora-varillas-pwa/
 │   ├── cloudformation.yaml     S3 privado + CloudFront OAC
 │   └── stack-policy.json       Denegación fail-closed de updates
 ├── scripts/
-│   ├── deploy-aws.sh           Revisión y creación separada en dos fases
-│   └── verify-site.sh          Smoke test HTTPS sin credenciales
+│   ├── aws-proof.mjs           Reglas puras de evidencia
+│   ├── validate-aws-proof.mjs  Constructor/validador local
+│   ├── deploy-aws.sh           Review, prepare y execute separados
+│   └── verify-site.sh          Verificación HTTPS anónima
+├── tests/                      Regresión de cálculo, PWA y fixtures AWS sintéticos
 ├── css/estilos.css
 ├── js/
 │   ├── calculo.js              Motor de cálculo sin DOM
@@ -117,30 +122,22 @@ calculadora-varillas-pwa/
 - Al cambiar el app shell, incrementa `VERSION` en `sw.js`; la interfaz avisará cuando la actualización esté lista.
 - Los datos de entrada nunca abandonan el dispositivo.
 
-Para regenerar iconos después de editar los SVG:
+## Alternativa AWS
 
-```bash
-npm run iconos
-```
+Este workflow preparó y verificó el código solo localmente: **no hizo llamadas AWS**. El intento `calculadora-varillas-pwa-public-prod` queda bloqueado e intacto. El único target futuro propuesto es `calculadora-varillas-pwa-public-prod-v2`; si una comprobación futura encuentra ese nombre o no puede demostrar su ausencia de forma inequívoca, el resultado es `STOP`, sin update, nombre alternativo, eliminación ni cleanup.
 
-## AWS
-
-La infraestructura usa CloudFormation y está limitada a crear una instancia nueva. Prefiere credenciales temporales de mínimo privilegio y revisa la identidad activa por un canal local seguro. No uses credenciales administrativas para el uso habitual.
-
-Primero valida sin escribir:
+Una operación futura comienza obteniendo hashes de commit, plantilla e identidad:
 
 ```bash
 ./scripts/deploy-aws.sh \
   --phase review \
   --profile <YOUR_AWS_PROFILE> \
-  --region <YOUR_AWS_REGION> \
-  --stack <YOUR_NEW_STACK_NAME> \
-  --environment prod
+  --region <YOUR_AWS_REGION>
 ```
 
-`--profile` es opcional. Después de revisar cuenta, región y SHA, `--phase prepare` crea únicamente un change set `CREATE` y lo deja sin ejecutar; una invocación separada con `--phase execute` vuelve a validarlo antes de crear los cinco recursos. En `prod`, el flujo activa y verifica termination protection antes de cargar los 13 archivos públicos. No existe una ruta de actualización, eliminación o limpieza.
+`review` consultará la identidad AWS cuando una persona autorizada lo ejecute. `prepare` requiere hashes aprobados, genera internamente nombre y client token, usa `CREATE` con `DO_NOTHING` y conserva evidencia privada `0700/0600`. `execute` exige otra autorización, repite toda la validación con un snapshot TOCTOU de máximo 300 segundos y solo entonces crea los cinco recursos. No existe ruta de actualización, eliminación o limpieza.
 
-No guardes credenciales en el repositorio ni versiones `.aws-change-set.json`, `.aws-deployment.json`, outputs, nombres físicos o estado local. Lee [docs/AWS-DEPLOYMENT.md](docs/AWS-DEPLOYMENT.md) antes de cualquier escritura.
+`DO_NOTHING`, el versionado y `Retain/Retain` pueden dejar recursos parciales y costos. Preparar, ejecutar y cualquier recuperación posterior requieren decisiones trazables separadas. No guardes credenciales, evidencia privada, cuentas, ARN, nombres físicos, tokens, outputs ni URL de recursos en Git.
 
 ## Licencia
 

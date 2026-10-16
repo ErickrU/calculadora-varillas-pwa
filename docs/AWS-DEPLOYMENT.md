@@ -1,104 +1,115 @@
 # Despliegue AWS seguro
 
-Esta alternativa crea una instancia nueva de Calculadora de Varillas con S3 privado y CloudFront OAC. El repositorio no contiene ni afirma un despliegue activo.
+Esta alternativa propone crear una instancia nueva de Calculadora de Varillas con S3 privado y CloudFront OAC. El único target futuro permitido es `calculadora-varillas-pwa-public-prod-v2`; esto no demuestra que esté libre ni que exista un despliegue activo.
 
-> S3, CloudFront, solicitudes, transferencia, versiones e invalidaciones pueden generar costos. Usa credenciales temporales de mínimo privilegio. Si no puedes determinar si la cuenta es de producción, trátala como producción y detente antes de escribir.
+> Este workflow preparó y verificó código exclusivamente de forma local: no hizo llamadas AWS. Toda operación futura requiere credenciales temporales de mínimo privilegio, revisión independiente y autorización trazable.
 
-## Controles principales
+## Intento bloqueado y regla de parada
 
-- S3: cuatro Block Public Access, `BucketOwnerEnforced`, SSE-S3 y versionado.
-- Origen: endpoint REST privado; no website endpoint, CORS ni ACL pública.
-- CloudFront: OAC SigV4 `always`, HTTP→HTTPS y solo `GET`/`HEAD`.
-- Política S3: lectura exclusiva desde la distribución creada mediante `AWS:SourceArn` y denegación de transporte inseguro.
-- Respuestas: CSP estricta, `DENY`, `nosniff`, HSTS, Referrer Policy y Permissions Policy; sin `X-XSS-Protection`.
-- Operación: creación única con `prepare`/`execute`, stack policy inmutable y termination protection para `prod` antes de publicar objetos.
+`calculadora-varillas-pwa-public-prod` es un intento bloqueado que debe permanecer intacto: el script nunca lo consulta, ejecuta, actualiza, elimina ni reutiliza.
 
-La plantilla no crea IAM, DNS, certificados, WAF, logs, funciones ni nombres físicos.
+`calculadora-varillas-pwa-public-prod-v2` solo puede usarse si una fase `prepare` futura todavía demuestra su ausencia inmediatamente antes de crear. Si `DescribeStacks` o `ListChangeSets` encuentra el nombre, devuelve un resultado ambiguo o no puede correlacionarse, el resultado es **STOP**. El script nunca actualiza un stack existente, elige otro nombre, elimina un intento ni realiza cleanup automático.
 
-## Requisitos
+Stack v2, entorno `prod`, `PriceClass_100`, tipo `CREATE`, nombre del change set y client token son internos. No existen opciones para inyectarlos.
 
-- AWS CLI v2, Node.js 20+, `jq`, `curl` y `shasum`;
-- un perfil SSO/rol temporal de mínimo privilegio o la cadena estándar de credenciales;
-- permisos para validar/crear la plantilla, aplicar protecciones, cargar la allowlist y crear una invalidación.
+## Controles conservados
 
-No guardes credenciales, cuentas, ARN ni outputs en Git. Los estados locales `.aws-change-set.json` y `.aws-deployment.json` están ignorados y el script los crea con modo `0600`.
+- S3 privado: cuatro Block Public Access, `BucketOwnerEnforced`, SSE-S3 y versionado.
+- CloudFront: OAC SigV4 `always`, HTTP→HTTPS y únicamente `GET`/`HEAD`.
+- Política S3: lectura exclusiva desde la distribución creada y denegación de transporte inseguro.
+- Cabeceras: CSP estricta, `DENY`, `nosniff`, HSTS, Referrer Policy y Permissions Policy; sin `X-XSS-Protection`.
+- Protección: stack policy que niega updates y termination protection antes de publicar contenido en `prod`.
+- PWA: allowlist exacta de 13 archivos, cinco controles WCO y un único Compartir.
 
-## 1. Revisar sin escribir
+`DeletionPolicy: Retain` conserva el bucket durante rollback de creación o eliminación del stack. `UpdateReplacePolicy: Retain` conserva el recurso anterior si una operación autorizada por separado lo reemplazara. S3, CloudFront, objetos versionados y recursos parciales pueden generar costos mientras permanezcan retenidos.
+
+## Requisitos para una operación futura
+
+- AWS CLI v2 compatible, Node.js 20+, `jq`, `curl`, `git`, `cmp` y `shasum`;
+- profile explícito de un rol temporal con el mínimo privilegio necesario;
+- región, commit e identidad aprobados fuera de banda;
+- repositorio limpio y commit publicado y revisado;
+- autorización separada para `prepare` y otra autorización explícita para `execute`.
+
+No guardes credenciales, cuentas, ARN, tokens, nombres físicos, outputs ni URL reales de recursos en Git. Cada intento se conserva en `.aws-attempts/<attempt-id>/` con directorio `0700` y archivos `0600`; `.aws-change-set.json` es un puntero privado `0600`. Un intento fallido permanece intacto y bloquea reintentos automáticos.
+
+## 1. Revisar hashes
+
+Una persona autorizada puede obtener los hashes sin crear, actualizar o eliminar infraestructura:
 
 ```bash
 ./scripts/deploy-aws.sh \
   --phase review \
   --profile <YOUR_AWS_PROFILE> \
-  --region <YOUR_AWS_REGION> \
-  --stack <YOUR_NEW_STACK_NAME> \
-  --environment prod
+  --region <YOUR_AWS_REGION>
 ```
 
-`--profile` es opcional. La fase valida archivos, sintaxis, identidad, plantilla y que el nombre de stack no exista. Solo muestra el SHA-256; no imprime cuenta, ARN ni identificadores físicos. Comprueba la identidad activa por un canal local seguro y no continúes si tiene permisos más amplios de lo necesario.
+Esta fase consultará la identidad activa en AWS cuando se ejecute en el futuro. Muestra únicamente hashes del commit, plantilla e identidad canónica. La identidad liga cuenta, principal, profile y región; los valores completos quedan fuera de reportes compartibles. `review` no decide que v2 esté libre.
 
-## 2. Preparar un change set CREATE
+## 2. Preparar un CREATE sin ejecutarlo
 
 ```bash
 ./scripts/deploy-aws.sh \
   --phase prepare \
   --profile <YOUR_AWS_PROFILE> \
   --region <YOUR_AWS_REGION> \
-  --stack <YOUR_NEW_STACK_NAME> \
-  --environment prod \
-  --confirm-account <YOUR_AWS_ACCOUNT_ID> \
-  --confirm-template-sha <YOUR_TEMPLATE_SHA256>
+  --confirm-commit-sha <APPROVED_COMMIT_SHA> \
+  --confirm-identity-sha <APPROVED_IDENTITY_SHA256>
 ```
 
-La fase vuelve a verificar todo, exige que el stack no exista y crea un change set `CREATE` sin ejecutarlo. Rechaza cualquier conjunto que no agregue exactamente los cinco recursos esperados o indique reemplazo. Su referencia queda solo en `.aws-change-set.json` con modo `0600`.
+Antes de cualquier API, el script inspecciona localmente el skeleton de AWS CLI v2 y exige soporte para `ClientToken` y `OnStackFailure`. Después:
 
-## 3. Ejecutar el change set preparado
+1. crea una sola vez el attempt ID, nombre de change set y client token, y los persiste antes del request;
+2. conserva los bytes exactos del template local y del blob del commit aprobado, y persiste la identidad normalizada `0600` antes de crear infraestructura;
+3. captura dos probes independientes e inmediatamente anteriores: `DescribeStacks` y `ListChangeSets`; el primero conserva su request ID exacto;
+4. emite literalmente `--change-set-type CREATE`, `--client-token` y `--on-stack-failure DO_NOTHING`, sin `DisableRollback`;
+5. conserva el contrato completo del request, parámetros/tags, opciones vacías, respuesta, stdout, stderr, timestamps UTC, identidad, región, profile, hashes e identificadores de correlación;
+6. exige eventos únicos de CloudTrail: `DescribeStacks` coincide con el request ID exacto; `CreateChangeSet` correlaciona éxito, identidad, región, tiempo, stack, nombre, token e ID retornado;
+7. mide un máximo de 60 segundos desde cada probe hasta el inicio real capturado de `CreateChangeSet`;
+8. recupera el template del change set y exige igualdad byte por byte con el archivo enviado y el commit;
+9. valida un placeholder `REVIEW_IN_PROGRESS` sin recursos, outputs ni template aplicado, un único change set disponible, opciones fuera de alcance vacías y exactamente cinco acciones `Add` allowlisted.
 
-Revisa el cambio fuera del repositorio. Si es correcto, repite los mismos argumentos con `execute`:
+Los campos de CloudTrail que no estén garantizados pueden faltar; cualquier valor presente debe concordar con el request, la respuesta y los snapshots sellados.
+
+`DO_NOTHING` deja el placeholder y cualquier recurso parcial disponibles para diagnóstico si la creación falla. No se combina con una opción de rollback incompatible. Puede conservar recursos facturables y no autoriza recuperarlos o borrarlos.
+
+`DescribeChangeSet` no está obligado a devolver `ChangeSetType`. El validador demuestra `CREATE` mediante la conjunción del request revisado, ausencia previa corroborada, creación correlacionada, placeholder vacío y cinco `Add`. Si aparece un valor contradictorio, se detiene.
+
+## 3. Ejecutar solo después de otra autorización
 
 ```bash
 ./scripts/deploy-aws.sh \
   --phase execute \
   --profile <YOUR_AWS_PROFILE> \
   --region <YOUR_AWS_REGION> \
-  --stack <YOUR_NEW_STACK_NAME> \
-  --environment prod \
-  --confirm-account <YOUR_AWS_ACCOUNT_ID> \
-  --confirm-template-sha <YOUR_TEMPLATE_SHA256>
+  --confirm-commit-sha <APPROVED_COMMIT_SHA> \
+  --confirm-identity-sha <APPROVED_IDENTITY_SHA256>
 ```
 
-La fase `execute`:
+Antes de `execute-change-set`, el script vuelve a comprobar identidad, commit, template remoto, placeholder vacío, único change set, descripción, parámetros, tags, modo `STANDARD`, `OnStackFailure`, opciones vacías y cinco acciones. Repite la validación completa inmediatamente antes de la llamada, exige igualdad exacta entre token del puntero, intento sellado y evidencia aprobada, y liga el timestamp UTC del guard al inicio de `execute-change-set`.
 
-1. valida modo y contenido del estado local;
-2. comprueba que el mismo change set sigue disponible y es exclusivamente `CREATE`;
-3. confirma que el stack está en revisión y no tiene recursos previos;
-4. ejecuta una sola vez y espera `CREATE_COMPLETE`;
-5. confirma identidad, cinco recursos y bucket vacío;
-6. aplica/verifica la stack policy y, en `prod`, ejecuta `cloudformation update-termination-protection --enable-termination-protection` y verifica el resultado;
-7. valida privacidad S3, cifrado, versionado, OAC, métodos, HTTPS y cabeceras antes de cargar contenido;
-8. exige `403` al acceso S3 anónimo directo;
-9. carga únicamente los 13 archivos públicos, recursos primero e HTML/service worker al final;
-10. invalida solo la distribución creada, verifica el sitio anónimamente, repite el `403` directo y guarda estado local `0600`.
+Todas las observaciones del snapshot TOCTOU, desde la primera hasta la última, deben tener como máximo 300 segundos. La llamada consume stack, change set y token del guard aprobado, no datos editables. Cualquier alteración, ausencia, contradicción o demora produce STOP y conserva todo.
 
-No ejecutes aquí el comando de termination protection de forma aislada: forma parte del gate de `execute` para una creación aprobada. No existe ruta de actualización, destrucción o limpieza. Cualquier operación futura sobre infraestructura desplegada requiere revisión y autorización separadas; nunca desactives protecciones de producción para sortear este límite.
+Tras una creación correcta, verifica stack policy, termination protection, S3 privado, los cuatro Block Public Access, ownership, SSE-S3, versionado, policy no pública, OAC SigV4, origen exacto, `GET`/`HEAD`, HTTPS y cabeceras antes de subir contenido. También exige rechazo del acceso S3 anónimo directo antes y después, y valida la publicación anónima final.
 
-## Verificación independiente
+## Evidencia, retención y recuperación
+
+Los archivos privados conservan valores completos y una cadena de hashes write-once. Los reportes `shareable-*.json` contienen exclusivamente hashes SHA-256 y booleanos. No adjuntes el directorio privado, el puntero ni el estado de despliegue a commits, issues o artefactos.
+
+No hay ruta de update, delete o cleanup. Cualquier recuperación de un intento parcial, incluso para detener costos, requiere diagnóstico, plan y autorización trazable separados. No desactives `Retain` ni termination protection para sortear este límite.
+
+## Verificación independiente de una publicación autorizada
 
 ```bash
 ./scripts/verify-site.sh <YOUR_CLOUDFRONT_HTTPS_URL>
 ```
 
-Comprueba redirección HTTPS, respuesta 200, cabeceras, ausencia de `X-XSS-Protection`, manifest, service worker, CSS, JavaScript, iconos, cinco controles y un solo Compartir. Prueba además instalación, segunda carga offline, vista móvil, teclado, Web Share y los dos fallbacks de portapapeles.
-
-El caso funcional de referencia debe seguir produciendo 8 barras, `As = 15 cm²` requerido y `16 cm²` colocado para `30 × 50 cm`, `1 %` y `5/8"`.
-
-## Retención y recuperación
-
-`DeletionPolicy: Retain` conserva el bucket durante un rollback de la creación inicial y al eliminar la stack; `UpdateReplacePolicy: Retain` lo conserva ante un reemplazo. El versionado, la stack policy y termination protection agregan más barreras contra pérdida accidental. El almacenamiento retenido y sus versiones pueden seguir generando cargos. Este repositorio no automatiza eliminación ni desactivación de protecciones.
+Comprueba HTTPS, cabeceras, manifest, service worker, CSS, JavaScript, iconos, cinco controles y Compartir con Web Share, Clipboard API, fallback y feedback accesible. El caso funcional debe seguir produciendo 8 barras, `As = 15 cm²` requerido y `16 cm²` colocado.
 
 ## Fuentes
 
 - [AWS: restringir un origen S3 mediante OAC](https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/private-content-restricting-access-to-s3.html)
-- [AWS: requerir HTTPS entre clientes y CloudFront](https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/using-https-viewers-to-cloudfront.html)
-- [AWS: políticas de cabeceras de respuesta](https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/understanding-response-headers-policies.html)
+- [AWS: CreateChangeSet](https://docs.aws.amazon.com/AWSCloudFormation/latest/APIReference/API_CreateChangeSet.html)
+- [AWS: DescribeChangeSet](https://docs.aws.amazon.com/AWSCloudFormation/latest/APIReference/API_DescribeChangeSet.html)
 
 Contenido reformulado para cumplir restricciones de licencia.

@@ -2,7 +2,7 @@
 
 ## Reportar una vulnerabilidad
 
-No publiques detalles sensibles en un issue. Usa [Report a vulnerability](https://github.com/ErickrU/calculadora-varillas-pwa/security/advisories/new) para enviar un reporte privado. Incluye impacto, pasos de reproducción y una prueba de concepto mínima que no afecte sistemas ajenos.
+No publiques detalles sensibles en un issue. Usa [Report a vulnerability](https://github.com/ErickrU/calculadora-varillas-pwa/security/advisories/new) para enviar un reporte privado. Incluye impacto, pasos de reproducción y una prueba mínima que no afecte sistemas ajenos.
 
 ## Modelo de seguridad
 
@@ -12,21 +12,30 @@ La aplicación es estática y ejecuta todos los cálculos en el navegador:
 - no transmite los valores del formulario;
 - no usa dependencias JavaScript de terceros ni recursos de CDN;
 - el service worker solo intercepta solicitudes `GET` del mismo origen;
-- Compartir usa la URL actual y el fallback de portapapeles informa el resultado en una región viva;
+- Compartir usa la URL actual y anuncia el resultado en una región viva;
 - no se deben introducir secretos en HTML, JavaScript, el manifest ni Git.
 
-El despliegue AWS propuesto agrega:
+La alternativa AWS mantiene:
 
-- bucket S3 privado con los cuatro controles de Block Public Access, `BucketOwnerEnforced`, SSE-S3 y versionado;
-- acceso al origen exclusivamente mediante CloudFront OAC con firma SigV4 permanente y condición `AWS:SourceArn`;
-- denegación explícita de transporte no seguro hacia S3;
+- bucket S3 privado con cuatro Block Public Access, `BucketOwnerEnforced`, SSE-S3 y versionado;
+- acceso al origen exclusivamente mediante CloudFront OAC con firma SigV4 y condición `AWS:SourceArn`;
+- denegación de transporte no seguro hacia S3;
 - redirección HTTP→HTTPS y únicamente `GET`/`HEAD` para clientes;
-- CSP sin `unsafe-inline`, `DENY`, `nosniff`, HSTS seguro para `cloudfront.net`, Referrer Policy y Permissions Policy, sin `X-XSS-Protection`;
-- `DeletionPolicy: Retain` conserva el bucket durante un rollback de la creación inicial y al eliminar la stack; `UpdateReplacePolicy: Retain` lo conserva ante un reemplazo;
-- versionado, stack policy que deniega todo update y termination protection para `prod` antes de publicar; el almacenamiento y las versiones retenidos pueden generar costos y no existe limpieza automática;
-- flujo de creación en dos invocaciones, sin rutas de actualización, eliminación o limpieza.
+- CSP sin `unsafe-inline`, `DENY`, `nosniff`, HSTS, Referrer Policy y Permissions Policy, sin `X-XSS-Protection`;
+- `DeletionPolicy: Retain` para rollback de creación o eliminación del stack y `UpdateReplacePolicy: Retain` para reemplazo;
+- stack policy que deniega updates y termination protection antes de publicar en `prod`.
 
-Este repositorio no versiona credenciales, outputs ni estado de una cuenta AWS. Usa credenciales temporales de mínimo privilegio, verifica la identidad activa antes de cualquier escritura y conserva `.aws-change-set.json` y `.aws-deployment.json` únicamente como estado local ignorado con modo `0600`. Consulta [`docs/AWS-DEPLOYMENT.md`](docs/AWS-DEPLOYMENT.md).
+## Evidencia y operaciones AWS
+
+Este workflow no hizo llamadas AWS. `calculadora-varillas-pwa-public-prod` es un intento bloqueado que permanece intacto. El único target futuro propuesto es `calculadora-varillas-pwa-public-prod-v2`; cualquier existencia o resultado ambiguo obliga a `STOP`, sin update, nombre alternativo, eliminación ni cleanup.
+
+El script exige profile explícito, commit e identidad aprobados y una plantilla ASCII+LF idéntica al blob revisado. Genera internamente attempt ID, nombre de change set y client token. Antes de crear exige `DescribeStacks` y `ListChangeSets` inmediatamente anteriores, y luego correlaciona CloudTrail por identidad, cuenta, región, tiempo, request ID, stack, nombre, token y respuesta.
+
+El validador fail-closed exige request `CREATE`, `OnStackFailure=DO_NOTHING`, opciones fuera de alcance vacías, placeholder `REVIEW_IN_PROGRESS` sin recursos, outputs o template aplicado, un único change set `CREATE_COMPLETE/AVAILABLE`, modo `STANDARD`, parámetros/tags exactos y cinco acciones `Add` allowlisted. No requiere `ChangeSetType` como campo de respuesta; rechaza un valor contradictorio. Antes de execute repite toda la conjunción con observaciones TOCTOU de máximo 300 segundos y liga el mismo timestamp y token al comando final.
+
+Los valores completos se conservan exclusivamente en `.aws-attempts/<attempt-id>/` (`0700`, archivos `0600`) y `.aws-change-set.json` (`0600`), ambos ignorados. Los reportes compartibles contienen solo hashes y booleanos. Nunca compartas el directorio, el puntero o `.aws-deployment.json`.
+
+`DO_NOTHING`, `Retain/Retain`, versionado y recursos parciales pueden conservar costos. No hay limpieza automática. Toda preparación, ejecución CREATE y recuperación posterior requieren autorizaciones trazables separadas; no desactives termination protection ni políticas de retención para evitar ese proceso.
 
 ## Alcance y datos
 
