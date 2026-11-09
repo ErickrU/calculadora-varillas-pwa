@@ -1,3 +1,7 @@
+> **Repositorio archivado (noviembre de 2026).** Esta fue una copia temprana de **Calculadora de Varillas**.
+> El desarrollo continúa en **https://github.com/ErickrU/calculadora-varillas**, que es el repositorio vigente y el que está desplegado.
+> Este repositorio se conserva solo como historial y no recibe cambios.
+
 # Calculadora de Varillas
 
 PWA sin dependencias que calcula **cuántas varillas longitudinales necesita una columna de concreto armado**, cómo distribuirlas y si la separación básica cumple la NTP E.060 (Perú), concordante con ACI 318.
